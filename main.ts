@@ -10,8 +10,9 @@
 //   2. copy       — mirror game/ into <out>/game and screenshots/ into
 //                   <out>/screenshots, then report what moved.
 //   3. report     — per-file byte and line counts for the copied game tree.
-//   4. dossier    — build the judge-facing dossier.json with the vendored
-//                   make.fun builder, then fold the build stats into it.
+//   4. dossier    — write the judge-facing dossier.json as exactly the bytes the
+//                   vendored make.fun builder returns for <out>; the build stats
+//                   (files, bytes, lines, modules, node) go to the log instead.
 //
 // Every step throws on failure; main() catches, prints one readable line to
 // stderr and exits non-zero, so a broken build never looks like a good one.
@@ -114,40 +115,6 @@ function resolveSpecifier(fromFile: string, specifier: string): string | null {
   const rel = relative(GAME_DIR, target);
   if (rel === '' || rel.startsWith('..') || rel.split(sep).includes('..')) return null;
   return rel.split(sep).join('/');
-}
-
-/**
- * The build's timestamp, and the only clock reading in the build.
- *
- * A build must be a pure function of the repository's own files: two runs over the same
- * tree have to write the same bytes. So there is no `new Date()` here. The value comes
- * from SOURCE_DATE_EPOCH (the reproducible-builds convention, whole seconds since the
- * Unix epoch) when it holds a plain integer, and is otherwise the fixed epoch literal, so
- * an absent or malformed variable leaves the bytes constant rather than varying per run.
- */
-const FALLBACK_TIMESTAMP = '1970-01-01T00:00:00.000Z';
-
-function buildTimestamp(): string {
-  const raw = process.env.SOURCE_DATE_EPOCH?.trim();
-  if (raw === undefined || !/^\d+$/.test(raw)) return FALLBACK_TIMESTAMP;
-  const date = new Date(Number(raw) * 1000);
-  return Number.isNaN(date.getTime()) ? FALLBACK_TIMESTAMP : date.toISOString();
-}
-
-/**
- * The output directory as a run-independent label, for the dossier's build block.
- *
- * The absolute path differs whenever the output directory differs, so it cannot be
- * written: the grader builds twice into different directories and diffs the results. The
- * label is instead the path relative to this repository (the layout's own name, `out`,
- * when the build writes inside the tree), and a fixed marker when the directory lies
- * outside the repository, where no stable name exists.
- */
-function outputLabel(outDir: string): string {
-  const rel = relative(HERE, resolve(outDir)).split(sep).join('/');
-  if (rel === '') return '.';
-  if (rel === '..' || rel.startsWith('../')) return '(outside the repository)';
-  return rel;
 }
 
 interface Preflight {
@@ -257,36 +224,20 @@ function printReport(rows: FileStat[]): void {
   }
 }
 
-interface BuildStats {
-  files: number;
-  bytes: number;
-  lines: number;
-  modules: number;
-  node: string;
-  builtAt: string;
-  outputDir: string;
-}
-
 function writeDossier(game: CopyReport, rows: FileStat[], pre: Preflight): number {
-  const stats: BuildStats = {
-    files: game.files,
-    bytes: game.bytes,
-    lines: rows.reduce((sum, r) => sum + (r.lines ?? 0), 0),
-    modules: pre.modules.length,
-    node: process.version,
-    builtAt: buildTimestamp(),
-    outputDir: outputLabel(OUT_DIR),
-  };
-
-  // buildDossier reads the copied tree and returns canonical JSON bytes. Parse it,
-  // add the build block beside the fields the judge already reads, and re-emit.
-  const base = JSON.parse(Buffer.from(buildDossier(OUT_DIR, CAPS)).toString('utf8')) as Record<string, unknown>;
-  const doc = { ...base, build: stats };
-  const bytes = Buffer.from(JSON.stringify(doc, null, 2) + '\n', 'utf8');
+  // The dossier is buildDossier's own bytes, written untouched: the gate compares
+  // out/dossier.json against a fresh buildDossier() call over the same directory.
+  // So no parse, no re-serialise, no added fields — those would change the bytes.
+  const bytes = buildDossier(OUT_DIR, CAPS);
 
   if (bytes.length > 4 * 1024 * 1024) fail(`dossier: ${bytes.length} bytes exceeds the 4 MiB cap`);
   writeFileSync(DOSSIER, bytes);
-  console.log(`dossier    ok  out/dossier.json  ${humanBytes(bytes.length)}  node ${stats.node}`);
+  console.log(`dossier    ok  out/dossier.json  ${humanBytes(bytes.length)}`);
+
+  // The build statistics live here, in the log, and nowhere in the dossier.
+  const lines = rows.reduce((sum, r) => sum + (r.lines ?? 0), 0);
+  console.log(`summary    ok  ${game.files} files  ${humanBytes(game.bytes)}  ${lines} text lines`);
+  console.log(`summary    ok  ${pre.modules.length} modules  node ${process.version}`);
   return bytes.length;
 }
 
