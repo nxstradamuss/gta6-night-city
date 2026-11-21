@@ -1,141 +1,105 @@
-// Drawing only: the world's state and the current screen in, pixels out. The 1280x720 playfield
-// is scaled to fit the window and centred, the margin filled with the backdrop colour. Flat
-// rectangles and circles, canvas text for the HUD and the panels. Text that holds a number is
-// rebuilt only when the number changes, so a frame allocates nothing.
-import { FIELD, FONT, LIVES, PALETTE } from './config.js';
-import { KIND_COIN } from './world.js';
+// Frame assembly: one place that owns the GL context, the render resolution and
+// the order the passes run in. Sky, wet asphalt, towers, lamps, cars, neon,
+// mission beacons, rain, then the bloom composite.
 
-export const SCREEN_TITLE = 'title';
-export const SCREEN_PLAY = 'play';
-export const SCREEN_PAUSED = 'paused';
-export const SCREEN_OVER = 'over';
+import { CONFIG } from './config.js';
+import { makeNoiseTexture } from './gl.js';
+import { SkyRenderer, RainRenderer, GlowBatch, BeaconRenderer, PostFX } from './fx.js';
+import { CityRenderer } from './city.js';
+import { CarRenderer } from './car.js';
 
-/** The panel's width; its height grows with its lines: room for the title, the lines and the prompt. */
-const PANEL = { width: 600, top: 134, line: 34, bottom: 70 };
-const LIFE_SIZE = 20;
-const LIFE_GAP = 8;
+export class Renderer {
+  constructor(canvas, rng) {
+    const gl = canvas.getContext('webgl2', {
+      antialias: false,
+      alpha: false,
+      depth: true,
+      stencil: false,
+      powerPreference: 'high-performance',
+      preserveDrawingBuffer: true,
+    });
+    if (!gl) throw new Error('This browser has no WebGL2 support.');
 
-function cachedLabel(prefix) {
-  let value = -1;
-  let text = '';
-  return function label(next) {
-    if (next !== value) {
-      value = next;
-      text = prefix + next;
-    }
-    return text;
-  };
-}
+    this.gl = gl;
+    this.canvas = canvas;
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.disable(gl.CULL_FACE);
+    gl.clearColor(CONFIG.fogColor[0], CONFIG.fogColor[1], CONFIG.fogColor[2], 1);
 
-export function createRenderer(canvas) {
-  const context = canvas.getContext('2d');
-  const view = { scale: 1, x: 0, y: 0 };
-  const scoreLabel = cachedLabel('Score ');
-  const levelLabel = cachedLabel('Level ');
-  const finalLabel = cachedLabel('Score ');
-  const bestLabel = cachedLabel('Best ');
+    this.noiseTex = makeNoiseTexture(gl, 256, rng);
+    this.sky = new SkyRenderer(gl);
+    this.rain = new RainRenderer(gl, rng);
+    this.glows = new GlowBatch(gl, 900);
+    this.beacon = new BeaconRenderer(gl);
+    this.cars = new CarRenderer(gl);
+    this.post = new PostFX(gl, 8, 8);
+    this.city = null;
 
-  function resize() {
-    const ratio = window.devicePixelRatio || 1;
-    const width = Math.round(window.innerWidth * ratio);
-    const height = Math.round(window.innerHeight * ratio);
-    canvas.width = width;
-    canvas.height = height;
-    view.scale = Math.min(width / FIELD.width, height / FIELD.height);
-    view.x = (width - FIELD.width * view.scale) / 2;
-    view.y = (height - FIELD.height * view.scale) / 2;
+    this.width = 0;
+    this.height = 0;
+    this.resize();
   }
 
-  const fonts = new Map();
-  function text(value, x, y, size, color, align) {
-    if (!fonts.has(size)) fonts.set(size, `${size}px ${FONT}`);
-    context.font = fonts.get(size);
-    context.fillStyle = color;
-    context.textAlign = align;
-    context.fillText(value, x, y);
+  setCity(city) {
+    this.city = new CityRenderer(this.gl, city, this.noiseTex);
   }
 
-  function drawField(state) {
-    context.fillStyle = PALETTE.sky;
-    context.fillRect(0, 0, FIELD.width, FIELD.height);
-    context.fillStyle = PALETTE.ground;
-    context.fillRect(0, FIELD.groundY, FIELD.width, FIELD.height - FIELD.groundY);
-
-    const items = state.items;
-    for (let index = 0; index < items.length; index += 1) {
-      const item = items[index];
-      if (!item.active) continue;
-      if (item.kind === KIND_COIN) {
-        context.fillStyle = PALETTE.coin;
-        context.beginPath();
-        context.arc(item.x + item.width / 2, item.y + item.height / 2, item.width / 2, 0, Math.PI * 2);
-        context.fill();
-      } else {
-        context.fillStyle = PALETTE.block;
-        context.fillRect(item.x, item.y, item.width, item.height);
-      }
+  // Render at a capped backing-store size: the canvas is stretched to the
+  // window by CSS, so a software rasteriser still gets a frame out in time.
+  resize() {
+    const canvas = this.canvas;
+    const dpr = Math.min(window.devicePixelRatio || 1, CONFIG.render.maxPixelRatio);
+    let w = Math.max(320, Math.round((canvas.clientWidth || 1280) * dpr));
+    let h = Math.max(180, Math.round((canvas.clientHeight || 720) * dpr));
+    const budget = CONFIG.render.maxPixels;
+    if (w * h > budget) {
+      const s = Math.sqrt(budget / (w * h));
+      w = Math.max(320, Math.round(w * s));
+      h = Math.max(180, Math.round(h * s));
     }
-
-    const player = state.player;
-    // Blink while invulnerable after a hit: hidden on every other tenth of a second.
-    if (player.invulnerable === 0 || Math.floor(player.invulnerable * 10) % 2 === 1) {
-      context.fillStyle = PALETTE.player;
-      context.fillRect(player.x, player.y, player.width, player.height);
-    }
+    if (w === this.width && h === this.height) return;
+    this.width = w;
+    this.height = h;
+    canvas.width = w;
+    canvas.height = h;
+    this.post.resize(w, h);
   }
 
-  function drawHud(state) {
-    context.textBaseline = 'top';
-    text(scoreLabel(state.score), 24, 20, 28, PALETTE.text, 'left');
-    text(levelLabel(state.level), FIELD.width / 2, 20, 28, PALETTE.text, 'center');
-    const firstLife = FIELD.width - 24 - LIVES * (LIFE_SIZE + LIFE_GAP) + LIFE_GAP;
-    text('Lives', firstLife - 12, 20, 28, PALETTE.text, 'right');
-    for (let life = 0; life < LIVES; life += 1) {
-      context.fillStyle = life < state.lives ? PALETTE.player : PALETTE.ground;
-      context.fillRect(firstLife + life * (LIFE_SIZE + LIFE_GAP), 24, LIFE_SIZE, LIFE_SIZE);
+  render(cam, scene, time) {
+    const gl = this.gl;
+    this.resize();
+    cam.aspect = (this.canvas.clientWidth || 1280) / (this.canvas.clientHeight || 720);
+    cam.compute();
+
+    const vp = cam.vp;
+
+    this.post.begin();
+
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+
+    this.sky.draw(cam, time);
+
+    this.city.drawGround(cam, vp, scene.lights);
+    this.city.drawBuildings(cam, vp);
+    this.city.drawLamps(cam, vp);
+
+    // Cars contribute their own headlight pools to the same glow batch.
+    this.glows.begin();
+    this.cars.draw(scene.cars, cam, vp, time, this.glows);
+    this.city.addGlows(this.glows, cam, 180);
+
+    this.city.drawSigns(cam, vp);
+
+    for (let i = 0; i < scene.markers.length; i++) {
+      this.beacon.draw(vp, scene.markers[i], time);
     }
+
+    this.rain.draw(cam, vp, time);
+    this.glows.draw(cam, vp);
+
+    this.post.end(time);
   }
-
-  function drawPanel(title, lines, prompt) {
-    const height = PANEL.top + lines.length * PANEL.line + PANEL.bottom;
-    const x = (FIELD.width - PANEL.width) / 2;
-    const y = (FIELD.height - height) / 2;
-    context.fillStyle = PALETTE.panel;
-    context.fillRect(x, y, PANEL.width, height);
-    context.textBaseline = 'alphabetic';
-    text(title, FIELD.width / 2, y + 78, 48, PALETTE.text, 'center');
-    for (let index = 0; index < lines.length; index += 1) {
-      text(lines[index], FIELD.width / 2, y + PANEL.top + index * PANEL.line, 22, PALETTE.muted, 'center');
-    }
-    text(prompt, FIELD.width / 2, y + height - 40, 24, PALETTE.coin, 'center');
-  }
-
-  const TITLE_LINES = ['Dodge the red blocks. Catch the gold coins.', 'Move with ← → or A D.  Pause with P.', ''];
-  const PAUSED_LINES = ['The blocks will wait for you.'];
-  const OVER_LINES = ['', ''];
-
-  /** Paint one frame: the field, then the HUD or a panel for the screen the game is on. */
-  function draw(state, screen, best) {
-    context.setTransform(1, 0, 0, 1, 0, 0);
-    context.fillStyle = PALETTE.backdrop;
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.setTransform(view.scale, 0, 0, view.scale, view.x, view.y);
-    drawField(state);
-    if (screen === SCREEN_TITLE) {
-      TITLE_LINES[2] = bestLabel(best);
-      drawPanel('Block Dodger', TITLE_LINES, 'Press Space or click to start');
-      return;
-    }
-    drawHud(state);
-    if (screen === SCREEN_PAUSED) drawPanel('Paused', PAUSED_LINES, 'Press P to resume');
-    else if (screen === SCREEN_OVER) {
-      OVER_LINES[0] = finalLabel(state.score);
-      OVER_LINES[1] = bestLabel(best);
-      drawPanel('Game over', OVER_LINES, 'Press Space or click to play again');
-    }
-  }
-
-  resize();
-  window.addEventListener('resize', resize);
-  return { draw };
 }

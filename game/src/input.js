@@ -1,53 +1,60 @@
-// Keyboard and pointer input. Held keys give a steering direction; one-shot presses (start or
-// restart, pause) are queued as bit flags and taken once by the loop, so a press between two
-// frames is never lost and never counted twice.
+// Keyboard input with a small action layer. Held keys drive the car every
+// frame; `pressed` is a one-shot set that main.js clears at the end of a frame.
 
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
+const DRIVE_KEYS = new Set([
+  'KeyW', 'KeyA', 'KeyS', 'KeyD',
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  'Space', 'ShiftLeft', 'ShiftRight',
+]);
 
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const CONFIRM = new Set(['Space', 'Enter']);
-const PAUSE = new Set(['KeyP', 'Escape']);
+export class Input {
+  constructor() {
+    this.keys = new Set();
+    this.pressed = new Set();
+    this.anyPress = false;
 
-export function createInput(target) {
-  let left = false;
-  let right = false;
-  let actions = 0;
+    this._onKeyDown = (e) => {
+      if (e.repeat) return;
+      if (DRIVE_KEYS.has(e.code)) e.preventDefault();
+      this.keys.add(e.code);
+      this.pressed.add(e.code);
+      this.anyPress = true;
+    };
+    this._onKeyUp = (e) => {
+      this.keys.delete(e.code);
+    };
+    this._onBlur = () => this.keys.clear();
 
-  window.addEventListener('keydown', (event) => {
-    if (LEFT.has(event.code)) left = true;
-    else if (RIGHT.has(event.code)) right = true;
-    else if (CONFIRM.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_CONFIRM;
-    } else if (PAUSE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PAUSE;
-    } else return;
-    event.preventDefault();
-  });
-  window.addEventListener('keyup', (event) => {
-    if (LEFT.has(event.code)) left = false;
-    else if (RIGHT.has(event.code)) right = false;
-  });
-  // A key released while the tab is hidden never sends keyup: let go of everything on blur.
-  window.addEventListener('blur', () => {
-    left = false;
-    right = false;
-  });
-  target.addEventListener('pointerdown', () => {
-    actions |= ACTION_CONFIRM;
-  });
+    window.addEventListener('keydown', this._onKeyDown, { passive: false });
+    window.addEventListener('keyup', this._onKeyUp);
+    window.addEventListener('blur', this._onBlur);
+  }
 
-  return {
-    /** -1 for left, 1 for right, 0 for neither or both. */
-    direction() {
-      return (right ? 1 : 0) - (left ? 1 : 0);
-    },
-    /** The one-shot presses since the last call, as ACTION_* flags. */
-    takeActions() {
-      const taken = actions;
-      actions = 0;
-      return taken;
-    },
-  };
+  down(...codes) {
+    for (const c of codes) if (this.keys.has(c)) return true;
+    return false;
+  }
+
+  wasPressed(...codes) {
+    for (const c of codes) if (this.pressed.has(c)) return true;
+    return false;
+  }
+
+  get throttle() {
+    return (this.down('KeyW', 'ArrowUp') ? 1 : 0) - (this.down('KeyS', 'ArrowDown') ? 1 : 0);
+  }
+
+  // +1 steers right, -1 steers left.
+  get steer() {
+    return (this.down('KeyD', 'ArrowRight') ? 1 : 0) - (this.down('KeyA', 'ArrowLeft') ? 1 : 0);
+  }
+
+  get handbrake() {
+    return this.down('Space', 'ShiftLeft', 'ShiftRight');
+  }
+
+  endFrame() {
+    this.pressed.clear();
+    this.anyPress = false;
+  }
 }
