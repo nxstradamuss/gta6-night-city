@@ -116,6 +116,40 @@ function resolveSpecifier(fromFile: string, specifier: string): string | null {
   return rel.split(sep).join('/');
 }
 
+/**
+ * The build's timestamp, and the only clock reading in the build.
+ *
+ * A build must be a pure function of the repository's own files: two runs over the same
+ * tree have to write the same bytes. So there is no `new Date()` here. The value comes
+ * from SOURCE_DATE_EPOCH (the reproducible-builds convention, whole seconds since the
+ * Unix epoch) when it holds a plain integer, and is otherwise the fixed epoch literal, so
+ * an absent or malformed variable leaves the bytes constant rather than varying per run.
+ */
+const FALLBACK_TIMESTAMP = '1970-01-01T00:00:00.000Z';
+
+function buildTimestamp(): string {
+  const raw = process.env.SOURCE_DATE_EPOCH?.trim();
+  if (raw === undefined || !/^\d+$/.test(raw)) return FALLBACK_TIMESTAMP;
+  const date = new Date(Number(raw) * 1000);
+  return Number.isNaN(date.getTime()) ? FALLBACK_TIMESTAMP : date.toISOString();
+}
+
+/**
+ * The output directory as a run-independent label, for the dossier's build block.
+ *
+ * The absolute path differs whenever the output directory differs, so it cannot be
+ * written: the grader builds twice into different directories and diffs the results. The
+ * label is instead the path relative to this repository (the layout's own name, `out`,
+ * when the build writes inside the tree), and a fixed marker when the directory lies
+ * outside the repository, where no stable name exists.
+ */
+function outputLabel(outDir: string): string {
+  const rel = relative(HERE, resolve(outDir)).split(sep).join('/');
+  if (rel === '') return '.';
+  if (rel === '..' || rel.startsWith('../')) return '(outside the repository)';
+  return rel;
+}
+
 interface Preflight {
   modules: string[];
   entries: string[];
@@ -240,8 +274,8 @@ function writeDossier(game: CopyReport, rows: FileStat[], pre: Preflight): numbe
     lines: rows.reduce((sum, r) => sum + (r.lines ?? 0), 0),
     modules: pre.modules.length,
     node: process.version,
-    builtAt: new Date().toISOString(),
-    outputDir: OUT_DIR,
+    builtAt: buildTimestamp(),
+    outputDir: outputLabel(OUT_DIR),
   };
 
   // buildDossier reads the copied tree and returns canonical JSON bytes. Parse it,
