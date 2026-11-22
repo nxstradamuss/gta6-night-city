@@ -244,6 +244,10 @@ function buildCarGeometry(police) {
   for (const sx of [-0.62, 0.62]) {
     pushBox(P, N, PT, I, sx, 1.02, 2.16, 0.42, 0.16, 0.10, HEAD);
     pushBox(P, N, PT, I, sx, 1.04, -2.16, 0.46, 0.14, 0.10, TAIL);
+    // A dark strip under each lamp so the light unit has an edge to sit on
+    // instead of floating on the bodywork, which is what gave the front end
+    // its pasted-on look at chase distance.
+    pushBox(P, N, PT, I, sx, 0.90, 2.17, 0.50, 0.05, 0.09, TRIM);
   }
 
   // The small parts that separate a car from a wedge on wheels: door mirrors,

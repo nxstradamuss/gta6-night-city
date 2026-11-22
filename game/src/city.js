@@ -152,7 +152,7 @@ export function generateCity(rng, cfg) {
   // Street furniture on the pavements: bollards, bins, hydrants, planters,
   // cones, crates and benches, plus the plant rooms, tanks and aerials that
   // break up the skyline. Drawn after the lamps with the same program.
-  const props = buildStreetProps(rng, { block: B, halfRoad, walk, reach: R })
+  const props = buildStreetProps(rng, { block: B, halfRoad, walk, reach: R + 1 })
     .concat(buildRoofProps(rng, buildings));
   // Rooftop clutter is appended to the same list: the pavements and the roofs
   // share one instanced batch, so the skyline gains detail without a new draw

@@ -3,7 +3,9 @@
 // the screenshots and stops simulating so the picture is byte-stable. The scene
 // handed to the renderer carries the player car's headlight position and aim, so
 // the ground shader can throw the cone onto the asphalt instead of faking a
-// round light pool under the bumper.
+// round light pool under the bumper. The aim is read every frame from the car's
+// heading, so the cone swings with the steering rather than pointing where the
+// body happens to be.
 
 import { CONFIG, PAINTS, STEP } from './config.js';
 import { Rng, mixSeed } from './random.js';

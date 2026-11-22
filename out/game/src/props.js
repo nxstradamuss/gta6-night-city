@@ -273,7 +273,7 @@ export function buildStreetProps(rng, { block: B, halfRoad, walk, reach: R }) {
       if (Math.abs(along) > R * B + 4) continue;
       if (Math.abs(along - Math.round(along / B) * B) < halfRoad + 1.2) continue;
       for (const side of [-1, 1]) {
-        if (rng.float(0, 1) > 0.44) continue;
+        if (rng.float(0, 1) > 0.52) continue;
         const off = side * (halfRoad + rng.float(0.75, walk - 0.35));
         const kind = pickKind(rng.float(0, 1));
         const yaw = Math.round(rng.float(0, 4)) * (Math.PI / 2);
