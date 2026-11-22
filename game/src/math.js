@@ -1,3 +1,4 @@
+// Night City final pass: crowd streaming, dashboard radar and wet asphalt.
 // Minimal column-major matrix and vector helpers. Only what the game needs:
 // no dependencies, no allocation-heavy maths in the frame loop.
 

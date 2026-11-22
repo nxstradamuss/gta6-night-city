@@ -1,3 +1,4 @@
+// Night City final pass: crowd streaming, dashboard radar and wet asphalt.
 // Chase camera with speed-dependent framing, plus a fixed-pose mode used by
 // the deterministic screenshot scenes.
 

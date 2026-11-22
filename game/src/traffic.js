@@ -1,3 +1,4 @@
+// Night City final pass: crowd streaming, dashboard radar and wet asphalt.
 // Ambient traffic. Cars are grid-bound: each one owns a road, a direction and a
 // progress coordinate, so they always sit in a lane, meet intersections at right
 // angles, and never need pathfinding. They are real Car instances, so the car

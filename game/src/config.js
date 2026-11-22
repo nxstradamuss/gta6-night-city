@@ -1,3 +1,4 @@
+// Night City final pass: crowd streaming, dashboard radar and wet asphalt.
 // Central tuning values for the whole game. Everything that shapes the world,
 // the car feel or the look of the night lives here so the modules stay readable.
 

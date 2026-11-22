@@ -1,3 +1,4 @@
+// Night City final pass: crowd streaming, dashboard radar and wet asphalt.
 // Player car: arcade driving physics (forward/lateral velocity split, grip,
 // handbrake drift) and the renderer that draws the body, glass, wheels,
 // emissive lamps, volumetric headlight cones and the light pools they cast.

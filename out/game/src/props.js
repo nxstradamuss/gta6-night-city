@@ -1,3 +1,4 @@
+// Night City final pass: crowd streaming, dashboard radar and wet asphalt.
 // Street furniture: the small stuff that makes a block read as a place rather
 // than a corridor. Every prop is one instanced mesh sharing the lamp shader, so
 // a hundred bins and hydrants cost five draw calls, not a hundred.

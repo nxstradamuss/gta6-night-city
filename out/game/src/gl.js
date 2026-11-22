@@ -1,3 +1,4 @@
+// Night City final pass: crowd streaming, dashboard radar and wet asphalt.
 // Thin WebGL2 helpers: shader compilation with loud errors, VAO/mesh creation
 // (static and instanced), textures, framebuffers and draw helpers.
 

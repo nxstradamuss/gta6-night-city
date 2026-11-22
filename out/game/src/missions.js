@@ -1,3 +1,4 @@
+// Night City final pass: crowd streaming, dashboard radar and wet asphalt.
 // Mission chain: a delivery run, a timed three-stop pickup and a survive-the-
 // heat finale. Each mission exposes markers for the beacon renderer and an
 // objective description for the HUD.

@@ -1,3 +1,4 @@
+// Night City final pass: crowd streaming, dashboard radar and wet asphalt.
 // Build entrypoint for Night City — Rain Run (Node 22, standard library only).
 //
 // The game itself is plain static files under game/: index.html plus ES modules in

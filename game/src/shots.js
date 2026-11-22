@@ -1,3 +1,4 @@
+// Night City final pass: crowd streaming, dashboard radar and wet asphalt.
 // The three screenshot scenes behind ?shot=1|2|3. Each one poses the real game
 // state (same cars, same physics, same seeded city) and then freezes, so the
 // frame is repeatable and the capture harness can take its time.

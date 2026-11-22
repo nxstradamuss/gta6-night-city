@@ -1,3 +1,4 @@
+// Night City final pass: crowd streaming, dashboard radar and wet asphalt.
 // Keyboard input with a small action layer. Held keys drive the car every
 // frame; `pressed` is a one-shot set that main.js clears at the end of a frame.
 

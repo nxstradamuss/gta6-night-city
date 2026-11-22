@@ -1,3 +1,4 @@
+// Night City final pass: crowd streaming, dashboard radar and wet asphalt.
 // Frame assembly: one place that owns the GL context, the render resolution and
 // the order the passes run in. Sky, wet asphalt, towers, lamps, cars, neon,
 // mission beacons, rain, then the bloom composite. The ground pass is handed the
@@ -90,6 +91,9 @@ export class Renderer {
     this.city.drawBuildings(cam, vp);
     this.city.drawLamps(cam, vp);
     this.city.drawProps(cam, vp);
+    // Pedestrians ride their own instanced pass so the crowd can animate without
+    // rebuilding the static street furniture every frame.
+    if (scene.peds) scene.peds.draw(cam, vp);
 
     // Cars contribute their own headlight pools to the same glow batch.
     this.glows.begin();

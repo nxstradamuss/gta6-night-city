@@ -1,3 +1,4 @@
+// Night City final pass: crowd streaming, dashboard radar and wet asphalt.
 // Atmosphere and post processing: gradient night sky with stars and a moon,
 // rain streaks, additive glow sprites, mission beacons, and the bloom +
 // colour-grade composite that gives the whole frame its neon haze.

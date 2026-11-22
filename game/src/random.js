@@ -1,3 +1,4 @@
+// Night City final pass: crowd streaming, dashboard radar and wet asphalt.
 // Deterministic pseudo random numbers. The whole city, the rain and every
 // window light are derived from one seed, so ?shot=N always renders the same
 // picture and ?seed=K gives a different but repeatable city.

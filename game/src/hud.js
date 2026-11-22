@@ -1,3 +1,4 @@
+// Night City final pass: crowd streaming, dashboard radar and wet asphalt.
 // DOM overlay: objective card, wanted stars, speedometer, health bar, cash,
 // control hint, mission toasts and a damage flash. Styled to match the neon
 // night rather than a generic debug panel.

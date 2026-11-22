@@ -1,3 +1,4 @@
+// Night City final pass: crowd streaming, dashboard radar and wet asphalt.
 // The district: a grid of blocks with towers, wet asphalt, neon signage and
 // street lamps. Geometry is instanced and the windows are computed per pixel,
 // so a whole city of thousands of lit windows costs a handful of draw calls.
