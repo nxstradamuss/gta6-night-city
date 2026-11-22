@@ -5,6 +5,7 @@
 import { CONFIG, NEON } from './config.js';
 import { LOC, GLSL_HASH, createProgram, makeMesh, drawMesh } from './gl.js';
 import { clamp, TAU } from './math.js';
+import { PROP_KINDS, buildStreetProps, buildRoofProps } from './props.js';
 
 const SIGN_WORDS = [
   ['MOTEL', '#ff2d95'],
@@ -148,7 +149,13 @@ export function generateCity(rng, cfg) {
     }
   }
 
-  return { buildings, signs, lamps, lots, block: B, halfRoad, walk };
+  // Street furniture on the pavements: bollards, bins, hydrants, planters,
+  // cones, crates and benches, plus the plant rooms, tanks and aerials that
+  // break up the skyline. Drawn after the lamps with the same program.
+  const props = buildStreetProps(rng, { block: B, halfRoad, walk, reach: R })
+    .concat(buildRoofProps(rng, buildings));
+
+  return { buildings, signs, lamps, props, lots, block: B, halfRoad, walk };
 }
 
 // Circle-versus-AABB push-out against every building footprint.
@@ -278,6 +285,10 @@ uniform float uWalk;
 uniform vec3 uLightPos[2];
 uniform vec3 uLightCol[2];
 uniform float uLightOn[2];
+uniform float uTime;
+uniform vec3 uHeadPos;
+uniform vec2 uHeadDir;
+uniform float uHeadOn;
 out vec4 fragColor;
 ${GLSL_HASH}
 
@@ -300,6 +311,16 @@ void main() {
 
   vec3 col = vec3(0.050, 0.053, 0.066) * (0.72 + 0.62 * grain);
   col += vec3(0.014, 0.015, 0.022) * n2.r;
+
+  // Asphalt that has actually been driven on: two polished tyre tracks per
+  // carriageway, a scatter of darker tar patches, and a fine aggregate speckle.
+  // Three cheap multiplications and the surface stops reading as flat grey.
+  float track = smoothstep(0.62, 0.06, abs(abs(across - halfRoad * 0.52) - 0.95));
+  col *= 1.0 - track * 0.24;
+  float tarPatch = step(0.87, hash21(floor(p * 0.105) + 7.3));
+  col = mix(col, col * vec3(0.60, 0.58, 0.65), tarPatch * 0.8);
+  float agg = hash21(floor(p * 8.5));
+  col *= 0.88 + 0.24 * agg;
 
   vec3 V = normalize(uCam - vWorld);
   for (int i = 0; i < 2; i++) {
@@ -336,6 +357,43 @@ void main() {
   float crossX = inZ * step(halfRoad, dx) * step(dx, halfRoad + 3.4);
   float zebra = step(0.42, fract((vert ? p.x : p.y) / 1.9));
   col = mix(col, vec3(0.42, 0.44, 0.48), max(crossZ, crossX) * zebra * 0.45);
+
+  // Wet reflections: every lit facade smears into long vertical streaks across
+  // the asphalt. A planar mirror pass would cost a whole extra render target,
+  // so this fakes it from the same hash that drives the windows -- and it is
+  // the single strongest read of "raining night" in the frame.
+  float dEdge = max(across - halfRoad, 0.0);
+  float streakCell = floor(along / 1.45);
+  float sh1 = hash11(streakCell * 1.73 + cell.x * 3.1 + cell.y * 7.7);
+  float sh2 = hash11(streakCell * 5.11 + cell.x * 1.9 + cell.y * 2.3);
+  float streakOn = step(0.40, sh1);
+  float streakFall = exp(-dEdge * 0.17) * smoothstep(0.0, 1.1, dEdge);
+  vec3 streakCol = mix(vec3(1.0, 0.78, 0.46), vec3(0.52, 0.84, 1.0), step(0.55, sh2));
+  streakCol = mix(streakCol, tint, 0.35);
+  col += streakCol * streakOn * streakFall * (0.30 + wet * 0.95) * road * (0.55 + 0.45 * grain);
+
+  // Rain landing in standing water: rings that bloom and die per puddle cell.
+  vec2 rc = p * 2.4;
+  vec2 rid = floor(rc);
+  vec2 rf = fract(rc) - 0.5;
+  float phase = fract(uTime * 1.55 + hash21(rid) * 9.0);
+  float ring = smoothstep(0.055, 0.0, abs(length(rf) - phase * 0.44)) * (1.0 - phase);
+  col += vec3(0.50, 0.66, 0.92) * ring * (0.10 + wet * 0.30) * road;
+
+  // Headlight wedge: two soft cones thrown forward from the player car, with a
+  // hot spot right at the nose and a long tail that the wet asphalt picks up.
+  vec2 hp = vWorld.xz - uHeadPos.xz;
+  float hFwd = dot(hp, uHeadDir);
+  float hSide = abs(hp.x * uHeadDir.y - hp.y * uHeadDir.x);
+  float wedge = smoothstep(0.0, 2.2, hFwd) * smoothstep(30.0, 6.0, hFwd);
+  wedge *= smoothstep(8.5, 1.2, hSide + max(hFwd, 0.0) * 0.30);
+  col += vec3(1.0, 0.93, 0.76) * wedge * uHeadOn * (0.30 + wet * 0.60);
+
+  // Standing water. Where the noise field says a puddle sits, the asphalt turns
+  // into a shallow mirror that picks up the sky and the neon hanging above it.
+  float pool = smoothstep(0.56, 0.80, n2.b) * road;
+  vec3 sky = mix(vec3(0.09, 0.13, 0.24), tint, 0.30);
+  col = mix(col, sky + col * 0.35, pool * 0.55);
 
   // Kerb and pavement.
   float pavement = step(halfRoad, across) * step(across, halfRoad + uWalk);
@@ -434,14 +492,35 @@ void main() {
     ? min(vLocal.z, 1.0 - vLocal.z) * vSize.z
     : min(vLocal.x, 1.0 - vLocal.x) * vSize.x;
 
-  // Window grid: one cell per floor, one per column.
-  float floorH = 3.55;
-  float colW = 3.1;
+  // Window grid: one cell per floor, one per column. Both pitch and the window
+  // rectangle are keyed off the building seed, so a block of towers reads as a
+  // row of different buildings instead of the same texture tiled sideways.
+  float vStyle = hash11(seed * 7.31);
+  float floorH = mix(3.30, 3.95, vStyle);
+  float colW = mix(2.50, 3.80, hash11(seed * 3.17));
+  float rectIn = mix(0.12, 0.29, hash11(seed * 5.70));
+  float rectOut = mix(0.71, 0.88, hash11(seed * 9.10));
   vec2 g = vec2(u / colW, vWorld.y / floorH);
   vec2 id = floor(g);
   vec2 f = fract(g);
-  vec2 rect = smoothstep(vec2(0.14), vec2(0.26), f) * smoothstep(vec2(0.86), vec2(0.74), f);
+  vec2 rect = smoothstep(vec2(rectIn), vec2(rectIn + 0.11), f)
+    * smoothstep(vec2(rectOut), vec2(rectOut - 0.11), f);
   float mask = rect.x * rect.y;
+
+  // Structure the eye can hold onto: a recessed shadow line under every floor
+  // slab, pilasters every third bay, and vertical rain grime streaking down the
+  // facade. This is what stops a lit grid from reading as flat wallpaper.
+  float fy = fract(vWorld.y / floorH);
+  float slabLine = smoothstep(0.055, 0.0, min(fy, 1.0 - fy));
+  col *= 1.0 - slabLine * 0.45;
+  col += vec3(0.22, 0.24, 0.33) * smoothstep(0.40, 0.38, min(fy, 1.0 - fy)) * 0.06;
+
+  float bayU = fract(u / (colW * 3.0));
+  float pilaster = smoothstep(0.045, 0.0, min(bayU, 1.0 - bayU));
+  col *= 1.0 - pilaster * 0.28;
+
+  float grime = hash11(floor(u * 1.35) + seed * 13.0);
+  col *= 0.84 + 0.16 * grime;
 
   float r = hash31(vec3(id, seed));
   float r2 = hash31(vec3(id.yx + 11.0, seed * 1.7));
@@ -534,10 +613,12 @@ layout(location=1) in vec3 aNormal;
 layout(location=3) in float aPart;
 layout(location=4) in vec3 iPos;
 layout(location=5) in float iYaw;
+layout(location=6) in vec3 iTint;
 uniform mat4 uVP;
 out vec3 vWorld;
 out vec3 vNormal;
 out float vPart;
+out vec3 vTint;
 void main() {
   float c = cos(iYaw);
   float s = sin(iYaw);
@@ -546,6 +627,7 @@ void main() {
   vWorld = wp;
   vNormal = vec3(aNormal.x * c + aNormal.z * s, aNormal.y, -aNormal.x * s + aNormal.z * c);
   vPart = aPart;
+  vTint = iTint;
   gl_Position = uVP * vec4(wp, 1.0);
 }`;
 
@@ -554,6 +636,7 @@ precision highp float;
 in vec3 vWorld;
 in vec3 vNormal;
 in float vPart;
+in vec3 vTint;
 uniform vec3 uCam;
 uniform vec3 uFogColor;
 uniform vec2 uFog;
@@ -561,13 +644,15 @@ out vec4 fragColor;
 void main() {
   vec3 col;
   if (vPart > 0.5) {
-    col = vec3(1.15, 0.95, 0.62);
+    // Emissive: lamp heads, bollard tops, cone bands, hydrant caps.
+    col = vec3(1.15, 0.95, 0.62) * vTint;
   } else {
     vec3 N = normalize(vNormal);
     vec3 V = normalize(uCam - vWorld);
     float d = max(dot(N, normalize(vec3(0.3, 0.8, 0.4))), 0.0);
     col = vec3(0.045, 0.048, 0.058) + vec3(0.30) * pow(max(dot(N, V), 0.0), 6.0);
     col *= 0.8 + 0.5 * d;
+    col *= vTint;
   }
   float dist = length(vWorld - uCam);
   float fog = clamp((dist - uFog.x) / (uFog.y - uFog.x), 0.0, 1.0);
@@ -692,6 +777,7 @@ export class CityRenderer {
     const lamp = lampGeometry();
     const lp = new Float32Array(city.lamps.length * 3);
     const ly = new Float32Array(city.lamps.length);
+    const lt = new Float32Array(city.lamps.length * 3).fill(1);
     city.lamps.forEach((L, i) => {
       lp[i * 3] = L.x; lp[i * 3 + 1] = 0; lp[i * 3 + 2] = L.z;
       ly[i] = L.yaw;
@@ -703,10 +789,42 @@ export class CityRenderer {
         { name: 'aPart', loc: LOC.part, size: 1, data: lamp.parts },
         { name: 'iPos', loc: LOC.ipos, size: 3, data: lp, divisor: 1 },
         { name: 'iYaw', loc: LOC.isize, size: 1, data: ly, divisor: 1 },
+        { name: 'iTint', loc: LOC.icolor, size: 3, data: lt, divisor: 1 },
       ],
       indices: lamp.indices,
     });
     this.lampCount = city.lamps.length;
+
+    // Street furniture. Same instanced program as the lamps, one mesh per kind
+    // so each instance can carry its own tint without a second shader.
+    this.props = [];
+    for (const kind of PROP_KINDS) {
+      const list = (city.props || []).filter((q) => q.kind === kind.id);
+      if (!list.length) continue;
+      const geo = kind.build();
+      const pp = new Float32Array(list.length * 3);
+      const py = new Float32Array(list.length);
+      const pt = new Float32Array(list.length * 3);
+      list.forEach((q, i) => {
+        pp[i * 3] = q.x; pp[i * 3 + 1] = q.y || 0; pp[i * 3 + 2] = q.z;
+        py[i] = q.yaw;
+        pt[i * 3] = q.tint[0]; pt[i * 3 + 1] = q.tint[1]; pt[i * 3 + 2] = q.tint[2];
+      });
+      this.props.push({
+        mesh: makeMesh(gl, {
+          attributes: [
+            { name: 'aPos', loc: LOC.pos, size: 3, data: geo.positions },
+            { name: 'aNormal', loc: LOC.normal, size: 3, data: geo.normals },
+            { name: 'aPart', loc: LOC.part, size: 1, data: geo.parts },
+            { name: 'iPos', loc: LOC.ipos, size: 3, data: pp, divisor: 1 },
+            { name: 'iYaw', loc: LOC.isize, size: 1, data: py, divisor: 1 },
+            { name: 'iTint', loc: LOC.icolor, size: 3, data: pt, divisor: 1 },
+          ],
+          indices: geo.indices,
+        }),
+        count: list.length,
+      });
+    }
 
     this.groundProg = createProgram(gl, GROUND_VS, GROUND_FS, { aPos: LOC.pos });
     this.buildProg = createProgram(gl, BUILD_VS, BUILD_FS, {
@@ -718,13 +836,15 @@ export class CityRenderer {
       iColor: LOC.icolor, iUv: LOC.iparam,
     });
     this.lampProg = createProgram(gl, LAMP_VS, LAMP_FS, {
-      aPos: LOC.pos, aNormal: LOC.normal, aPart: LOC.part, iPos: LOC.ipos, iYaw: LOC.isize,
+      aPos: LOC.pos, aNormal: LOC.normal, aPart: LOC.part, iPos: LOC.ipos,
+      iYaw: LOC.isize, iTint: LOC.icolor,
     });
   }
 
-  drawGround(cam, vp, lights) {
+  drawGround(cam, vp, scene, time) {
     const gl = this.gl;
     const p = this.groundProg;
+    const lights = scene.lights;
     p.use();
     gl.uniformMatrix4fv(p.u('uVP'), false, vp);
     gl.uniform3fv(p.u('uCam'), cam.eye);
@@ -733,6 +853,12 @@ export class CityRenderer {
     gl.uniform1f(p.u('uBlock'), this.city.block);
     gl.uniform1f(p.u('uHalfRoad'), this.city.halfRoad);
     gl.uniform1f(p.u('uWalk'), this.city.walk);
+    gl.uniform1f(p.u('uTime'), time || 0);
+
+    const head = (scene && scene.headlight) || { x: 0, z: 0, dx: 0, dz: 1, on: 0 };
+    gl.uniform3f(p.u('uHeadPos'), head.x, 0, head.z);
+    gl.uniform2f(p.u('uHeadDir'), head.dx, head.dz);
+    gl.uniform1f(p.u('uHeadOn'), head.on);
 
     const pos = new Float32Array(6);
     const col = new Float32Array(6);
@@ -794,6 +920,18 @@ export class CityRenderer {
     gl.uniform3fv(p.u('uFogColor'), CONFIG.fogColor);
     gl.uniform2f(p.u('uFog'), CONFIG.fogNear, CONFIG.fogFar);
     drawMesh(gl, this.lampMesh, this.lampCount);
+  }
+
+  drawProps(cam, vp) {
+    if (!this.props.length) return;
+    const gl = this.gl;
+    const p = this.lampProg;
+    p.use();
+    gl.uniformMatrix4fv(p.u('uVP'), false, vp);
+    gl.uniform3fv(p.u('uCam'), cam.eye);
+    gl.uniform3fv(p.u('uFogColor'), CONFIG.fogColor);
+    gl.uniform2f(p.u('uFog'), CONFIG.fogNear, CONFIG.fogFar);
+    for (const batch of this.props) drawMesh(gl, batch.mesh, batch.count);
   }
 
   addGlows(glows, cam, range = 175) {

@@ -82,9 +82,10 @@ export class Renderer {
 
     this.sky.draw(cam, time);
 
-    this.city.drawGround(cam, vp, scene.lights);
+    this.city.drawGround(cam, vp, scene, time);
     this.city.drawBuildings(cam, vp);
     this.city.drawLamps(cam, vp);
+    this.city.drawProps(cam, vp);
 
     // Cars contribute their own headlight pools to the same glow batch.
     this.glows.begin();

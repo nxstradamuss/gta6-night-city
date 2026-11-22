@@ -188,16 +188,46 @@ function pushWheel(P, N, PT, I, cx, cy, cz, radius, halfWidth, part, segs = 12) 
   }
 }
 
+// A box whose top face can be pulled in on either axis. Straight boxes read as
+// bricks; what makes a shape read as a car is the shoulder line that tapers in
+// toward the roof and the nose that narrows ahead of the windscreen.
+function pushTaperBox(P, N, PT, I, cx, cy, cz, sx, sy, sz, part, topX = 1, topZ = 1) {
+  const bx = sx / 2, bz = sz / 2, hy = sy / 2;
+  const tx = bx * topX, tz = bz * topZ;
+  const faces = [
+    [[bx, -1, bz], [bx, -1, -bz], [tx, 1, -tz], [tx, 1, tz]],
+    [[-bx, -1, -bz], [-bx, -1, bz], [-tx, 1, tz], [-tx, 1, -tz]],
+    [[-bx, -1, bz], [bx, -1, bz], [tx, 1, tz], [-tx, 1, tz]],
+    [[bx, -1, -bz], [-bx, -1, -bz], [-tx, 1, -tz], [tx, 1, -tz]],
+    [[-tx, 1, tz], [tx, 1, tz], [tx, 1, -tz], [-tx, 1, -tz]],
+    [[-bx, -1, -bz], [bx, -1, -bz], [bx, -1, bz], [-bx, -1, bz]],
+  ];
+  for (const f of faces) {
+    const base = P.length / 3;
+    const wp = f.map(([ux, uy, uz]) => [cx + ux, cy + uy * hy, cz + uz]);
+    for (const v of wp) P.push(v[0], v[1], v[2]);
+    const ax = wp[1][0] - wp[0][0], ay = wp[1][1] - wp[0][1], az = wp[1][2] - wp[0][2];
+    const bx2 = wp[2][0] - wp[0][0], by2 = wp[2][1] - wp[0][1], bz2 = wp[2][2] - wp[0][2];
+    let nx = ay * bz2 - az * by2;
+    let ny = az * bx2 - ax * bz2;
+    let nz = ax * by2 - ay * bx2;
+    const len = Math.hypot(nx, ny, nz) || 1;
+    nx /= len; ny /= len; nz /= len;
+    for (let k = 0; k < 4; k++) { N.push(nx, ny, nz); PT.push(part); }
+    I.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  }
+}
+
 function buildCarGeometry(police) {
   const P = [], N = [], PT = [], I = [];
   const BODY = 0, GLASS = 1, WHEEL = 2, HEAD = 3, TAIL = 4, TRIM = 5, RED = 6, BLUE = 7;
 
-  pushBox(P, N, PT, I, 0, 0.62, 0, 1.92, 0.46, 4.30, BODY);
-  pushBox(P, N, PT, I, 0, 0.93, 0, 1.80, 0.34, 4.06, BODY);
-  pushBox(P, N, PT, I, 0, 1.10, 1.25, 1.72, 0.26, 1.55, BODY);
-  pushBox(P, N, PT, I, 0, 1.08, -1.55, 1.74, 0.30, 1.00, BODY);
-  pushBox(P, N, PT, I, 0, 1.32, -0.15, 1.58, 0.52, 1.90, GLASS);
-  pushBox(P, N, PT, I, 0, 1.58, -0.20, 1.44, 0.10, 1.52, BODY);
+  pushTaperBox(P, N, PT, I, 0, 0.62, 0, 1.92, 0.46, 4.30, BODY, 0.97, 0.99);
+  pushTaperBox(P, N, PT, I, 0, 0.93, 0, 1.80, 0.34, 4.06, BODY, 0.95, 0.98);
+  pushTaperBox(P, N, PT, I, 0, 1.10, 1.25, 1.72, 0.26, 1.55, BODY, 0.90, 0.86);
+  pushTaperBox(P, N, PT, I, 0, 1.08, -1.55, 1.74, 0.30, 1.00, BODY, 0.94, 0.92);
+  pushTaperBox(P, N, PT, I, 0, 1.32, -0.15, 1.58, 0.52, 1.90, GLASS, 0.84, 0.80);
+  pushTaperBox(P, N, PT, I, 0, 1.58, -0.20, 1.44, 0.10, 1.52, BODY, 0.93, 0.94);
   pushBox(P, N, PT, I, 0, 0.62, 2.20, 1.96, 0.22, 0.30, TRIM);
   pushBox(P, N, PT, I, 0, 0.62, -2.20, 1.96, 0.22, 0.30, TRIM);
   pushBox(P, N, PT, I, -0.96, 0.45, 0, 0.10, 0.14, 3.30, TRIM);
@@ -211,6 +241,22 @@ function buildCarGeometry(police) {
     pushBox(P, N, PT, I, sx, 1.02, 2.16, 0.42, 0.16, 0.10, HEAD);
     pushBox(P, N, PT, I, sx, 1.04, -2.16, 0.46, 0.14, 0.10, TAIL);
   }
+
+  // The small parts that separate a car from a wedge on wheels: door mirrors,
+  // arch flares over each wheel, plates, exhaust tips, grille bars and wipers.
+  for (const sx of [-1, 1]) {
+    pushTaperBox(P, N, PT, I, sx * 0.90, 1.26, 0.72, 0.24, 0.11, 0.17, TRIM, 0.7, 0.8);
+    pushBox(P, N, PT, I, sx * 0.98, 0.62, 1.42, 0.10, 0.30, 0.62, TRIM);
+    pushBox(P, N, PT, I, sx * 0.98, 0.62, -1.42, 0.10, 0.30, 0.62, TRIM);
+    pushBox(P, N, PT, I, sx * 0.55, 0.36, -2.24, 0.16, 0.10, 0.10, TRIM);
+    pushBox(P, N, PT, I, sx * 0.72, 1.14, 2.12, 0.30, 0.05, 0.06, TRIM);
+  }
+  pushBox(P, N, PT, I, 0, 0.72, 2.26, 0.62, 0.15, 0.04, TRIM);
+  pushBox(P, N, PT, I, 0, 0.72, -2.26, 0.58, 0.15, 0.04, TRIM);
+  for (let i = -1; i <= 1; i++) {
+    pushBox(P, N, PT, I, i * 0.26, 0.92, 2.20, 0.10, 0.05, 0.06, TRIM);
+  }
+  pushBox(P, N, PT, I, -0.30, 1.50, 0.86, 0.62, 0.03, 0.05, TRIM);
 
   for (const wx of [-0.93, 0.93]) {
     for (const wz of [-1.42, 1.42]) {

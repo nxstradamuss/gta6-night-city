@@ -199,7 +199,19 @@ export class Game {
       on: 1,
     });
 
-    return { cars, markers, lights };
+    return {
+      cars,
+      markers,
+      lights,
+      // The headlight cone is painted straight onto the asphalt in the ground
+      // shader: a point light gives a round pool, but what sells a night drive
+      // is the long wedge of light that stretches down the wet road ahead.
+      headlight: {
+        x: p.pos[0], z: p.pos[2],
+        dx: f[0], dz: f[2],
+        on: p.lightsOn ? 1 : 0,
+      },
+    };
   }
 
   render() {
