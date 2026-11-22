@@ -5,11 +5,12 @@
 // game/src/ that a desktop browser loads offline, with no library and no network.
 // This script is the gate between that source tree and the grader's /output:
 //
-//   1. output     — refuse an output directory that is not a safe place to write:
-//                   inside the repository, never the repository root itself, never
-//                   inside game/, screenshots/, vendor/ or .git/. The grader's
-//                   /output (mounted beside the read-only repository) is the one
-//                   directory outside the repository that is accepted.
+//   1. output     — accept any output directory that would not copy a source tree
+//                   into itself: never the repository root, never inside game/,
+//                   screenshots/, vendor/ or .git/. A directory outside the
+//                   repository is fine — the grader's /output, or any
+//                   MAKEFUN_OUTPUT_DIR such as /tmp/v17out. A writability probe
+//                   falls back to /output when the chosen directory cannot be made.
 //   2. preflight  — verify the source tree is coherent before copying a byte:
 //                   index.html exists, every script it loads exists, every import
 //                   resolves to a file under game/, and every game/src/*.js module
@@ -40,20 +41,21 @@ import { buildDossier } from './vendor/makefun-game.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // The grader sets nothing and mounts a writable /output; outside it MAKEFUN_OUTPUT_DIR
-// names a directory of our own, which has to stay inside the repository.
+// names any directory of our own, inside or outside the repository, as long as it is
+// not one of the source trees the build copies from.
 const OUT_ENV = process.env.MAKEFUN_OUTPUT_DIR;
 const OUT_DIR = OUT_ENV ?? '/output';
 const PLATFORM_OUT = '/output';
-const OUT_ROOT = resolve(OUT_DIR);
+let OUT_ROOT = resolve(OUT_DIR);
 
 const GAME_DIR = join(HERE, 'game');
 const SRC_DIR = join(GAME_DIR, 'src');
 const SHOTS_DIR = join(HERE, 'screenshots');
 const VENDOR_DIR = join(HERE, 'vendor');
 const GIT_DIR = join(HERE, '.git');
-const OUT_GAME = join(OUT_ROOT, 'game');
-const OUT_SHOTS = join(OUT_ROOT, 'screenshots');
-const DOSSIER = join(OUT_ROOT, 'dossier.json');
+let OUT_GAME = join(OUT_ROOT, 'game');
+let OUT_SHOTS = join(OUT_ROOT, 'screenshots');
+let DOSSIER = join(OUT_ROOT, 'dossier.json');
 
 // The scorer's caps (reference/gate.json). text_max_bytes is the one that shapes
 // the dossier's bytes; the rest make the builder refuse an entry the scorer would.
@@ -99,10 +101,11 @@ function isBelow(parent: string, child: string): boolean {
 }
 
 /**
- * The output directory must be a directory of this repository that holds none of its
- * sources: writing game/ into game/ would copy the tree into itself. The one exception
- * is the platform's /output, which the grader mounts next to a read-only repository and
- * which is only reachable when MAKEFUN_OUTPUT_DIR is unset.
+ * The output directory must not be one of the trees this build copies from: writing
+ * game/ into game/ (or into screenshots/, vendor/ or .git/) would copy a source tree
+ * into itself. The repository root is refused for the same reason. Any other path is
+ * accepted, including one outside the repository such as the grader's /output or a
+ * MAKEFUN_OUTPUT_DIR like /tmp/v17out.
  */
 function validateOutputDir(): void {
   if (OUT_ENV === undefined) {
@@ -110,15 +113,35 @@ function validateOutputDir(): void {
     return;
   }
   if (OUT_ROOT === HERE) {
-    fail(`output: MAKEFUN_OUTPUT_DIR=${OUT_DIR} is the repository root ${HERE}: the build would copy game/ into its own source tree; point it at a subdirectory such as out`);
-  }
-  if (!isBelow(HERE, OUT_ROOT)) {
-    fail(`output: MAKEFUN_OUTPUT_DIR=${OUT_DIR} resolves to ${OUT_ROOT}, which is outside the repository ${HERE}; point it at a subdirectory of the repository, such as out`);
+    fail(`output: MAKEFUN_OUTPUT_DIR=${OUT_DIR} is the repository root ${HERE}: the build would copy game/ into its own source tree; point it at a subdirectory such as out or a directory outside the repository`);
   }
   for (const [label, dir] of [['game/', GAME_DIR], ['screenshots/', SHOTS_DIR], ['vendor/', VENDOR_DIR], ['.git/', GIT_DIR]] as const) {
     if (OUT_ROOT === dir || isBelow(dir, OUT_ROOT)) {
       fail(`output: MAKEFUN_OUTPUT_DIR=${OUT_DIR} resolves to ${OUT_ROOT}, inside ${label}; the build would write its output into the source tree it copies from`);
     }
+  }
+}
+
+/**
+ * Make the output directory, falling back to the platform's /output when the chosen
+ * one cannot be created for lack of permission. Any other failure, or a failure at
+ * /output itself, propagates: the build must not silently write nowhere.
+ */
+function probeOutputDir(): void {
+  try {
+    mkdirSync(OUT_ROOT, { recursive: true });
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if ((code === 'EACCES' || code === 'EROFS' || code === 'EPERM') && OUT_ROOT !== PLATFORM_OUT) {
+      console.warn(`output     warn  cannot create ${OUT_ROOT} (${code}); falling back to ${PLATFORM_OUT}`);
+      OUT_ROOT = PLATFORM_OUT;
+      OUT_GAME = join(OUT_ROOT, 'game');
+      OUT_SHOTS = join(OUT_ROOT, 'screenshots');
+      DOSSIER = join(OUT_ROOT, 'dossier.json');
+      mkdirSync(OUT_ROOT, { recursive: true });
+      return;
+    }
+    throw err;
   }
 }
 
@@ -339,6 +362,7 @@ function build(): void {
   console.log(`build      out=${OUT_DIR}`);
 
   validateOutputDir();
+  probeOutputDir();
   const pre = preflight();
   mkdirSync(OUT_ROOT, { recursive: true });
 
