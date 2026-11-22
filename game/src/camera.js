@@ -1,10 +1,17 @@
 // Night City final pass: crowd streaming, dashboard radar and wet asphalt.
-// Chase camera with speed-dependent framing, plus a fixed-pose mode used by
-// the deterministic screenshot scenes.
+// Chase camera with speed-dependent framing, plus a fixed pose for stills.
 
 import {
   m4, m4lookAt, m4mul, m4perspective, clamp, damp, v3cross, v3norm, v3sub,
 } from './math.js';
+import { CONFIG } from './config.js';
+
+// The rig geometry lives in CONFIG so the world tuning reads in one place.
+const CAM = CONFIG.camera;
+
+// Where the camera aims: the lead runs further down the road as speed builds, so
+// at 200 km/h the player looks at the next junction. Short at rest.
+const LOOK_AHEAD = { base: 9, perSpeed: 0.2, max: 22 };
 
 export class Camera {
   constructor() {
@@ -30,7 +37,7 @@ export class Camera {
 
   snapTo(car) {
     const f = car.forward();
-    this.eye = [car.pos[0] - f[0] * 8.6, 3.5, car.pos[2] - f[2] * 8.6];
+    this.eye = [car.pos[0] - f[0] * CAM.backDistance, CAM.height, car.pos[2] - f[2] * CAM.backDistance];
     this.target = [car.pos[0] + f[0] * 8, 1.45, car.pos[2] + f[2] * 8];
     this.compute();
   }
@@ -39,8 +46,8 @@ export class Camera {
     this._t += dt;
     const f = car.forward();
     const sp = clamp(car.speed, 0, 52);
-    const dist = 8.4 + sp * 0.062;
-    const height = 3.45 + sp * 0.014;
+    const dist = CAM.backDistance + sp * CAM.backPerSpeed;
+    const height = CAM.height + sp * CAM.heightPerSpeed;
     const eyeX = car.pos[0] - f[0] * dist;
     const eyeZ = car.pos[2] - f[2] * dist;
     const k = 4.8;
@@ -48,8 +55,11 @@ export class Camera {
     this.eye[1] = damp(this.eye[1], height, k * 0.8, dt);
     this.eye[2] = damp(this.eye[2], eyeZ, k, dt);
 
-    const lookX = car.pos[0] + f[0] * 9;
-    const lookZ = car.pos[2] + f[2] * 9;
+    // Lead the car: the faster it goes, the further ahead the camera looks. The
+    // eye keeps its distance, only the aim point moves out.
+    const lead = Math.min(LOOK_AHEAD.max, LOOK_AHEAD.base + sp * LOOK_AHEAD.perSpeed);
+    const lookX = car.pos[0] + f[0] * lead;
+    const lookZ = car.pos[2] + f[2] * lead;
     this.target[0] = damp(this.target[0], lookX, 7, dt);
     this.target[1] = damp(this.target[1], 1.5, 6, dt);
     this.target[2] = damp(this.target[2], lookZ, 7, dt);
@@ -64,7 +74,7 @@ export class Camera {
 
   compute() {
     m4lookAt(this.view, this.eye, this.target, [0, 1, 0]);
-    m4perspective(this.proj, this.fov, this.aspect, 0.12, 720);
+    m4perspective(this.proj, this.fov, this.aspect, CAM.near, CAM.drawDistance);
     m4mul(this.vp, this.proj, this.view);
     const f = v3norm(v3sub(this.target, this.eye));
     this.forward = f;

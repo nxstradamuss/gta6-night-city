@@ -1,7 +1,6 @@
 // Night City final pass: crowd streaming, dashboard radar and wet asphalt.
-// DOM overlay: objective card, wanted stars, speedometer, health bar, cash,
-// control hint, mission toasts and a damage flash. Styled to match the neon
-// night rather than a generic debug panel.
+// DOM overlay: objective card, wanted stars, speedometer, health, cash, hints,
+// toasts and a damage flash, styled to the neon night.
 
 const CSS = `
 #hud {
@@ -50,6 +49,10 @@ const CSS = `
   text-shadow: 0 0 14px rgba(255,180,40,0.75);
 }
 #hud-wanted .stars { opacity: 0.96; }
+#hud-wanted .level {
+  margin-top: 2px; font-size: 10px; letter-spacing: 3.4px; color: #ff9d5c;
+  opacity: 0.9; text-shadow: 0 0 10px rgba(255,120,40,0.55);
+}
 #hud-wanted .cash {
   margin-top: 4px; font-size: 15px; letter-spacing: 1.5px; color: #9ef7c9;
   text-shadow: 0 0 10px rgba(80,255,170,0.5);
@@ -130,8 +133,12 @@ export class Hud {
         <div class="timer"></div>
         <div class="bar"><i></i></div>
       </div>
-      <div id="hud-wanted"><div class="stars">☆☆☆☆☆</div><div class="cash">$0</div></div>
-      <div id="hud-speed"><div class="num">0</div><span class="unit">KM/H</span></div>
+      <div id="hud-wanted">
+        <div class="stars">☆☆☆☆☆</div>
+        <div class="level">WANTED 0</div>
+        <div class="cash">$0</div>
+      </div>
+      <div id="hud-speed"><div class="num">0.0</div><span class="unit">KM/H</span></div>
       <div id="hud-health"><div class="label">CONDITION</div><div class="bar"><i></i></div></div>
       <div id="hud-hint">W A S D &nbsp;·&nbsp; SPACE handbrake &nbsp;·&nbsp; R reset</div>
       <div id="hud-toast"></div>
@@ -144,6 +151,7 @@ export class Hud {
     this.objTimer = this.root.querySelector('#hud-obj .timer');
     this.objBar = this.root.querySelector('#hud-obj .bar i');
     this.stars = this.root.querySelector('#hud-wanted .stars');
+    this.level = this.root.querySelector('#hud-wanted .level');
     this.cash = this.root.querySelector('#hud-wanted .cash');
     this.speedNum = this.root.querySelector('#hud-speed .num');
     this.healthWrap = this.root.querySelector('#hud-health');
@@ -186,9 +194,11 @@ export class Hud {
   }
 
   setStats({ speed = 0, health = 100, wanted = 0, cash = 0 }) {
-    const kmh = Math.round(speed * 3.6);
+    // One decimal of km/h: whole numbers hide the creep at low speed and flicker
+    // as the car settles.
+    const kmh = (Math.max(0, speed) * 3.6).toFixed(1);
     if (this._last.kmh !== kmh) {
-      this.speedNum.textContent = String(kmh);
+      this.speedNum.textContent = kmh;
       this._last.kmh = kmh;
     }
     const hp = Math.max(0, Math.min(100, health));
@@ -201,6 +211,10 @@ export class Hud {
     const w = Math.max(0, Math.min(5, wanted | 0));
     if (this._last.wanted !== w) {
       this.stars.textContent = '★'.repeat(w) + '☆'.repeat(5 - w);
+      // Spell the level out: the stars are decoration, the number is what the
+      // player checks.
+      this.level.textContent = w === 0 ? 'NO HEAT' : `WANTED ${w}`;
+      this.level.style.color = w >= 4 ? '#ff5a4a' : '#ff9d5c';
       this._last.wanted = w;
     }
     if (this._last.cash !== cash) {

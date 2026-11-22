@@ -1,6 +1,5 @@
 // Night City final pass: crowd streaming, dashboard radar and wet asphalt.
-// Central tuning values for the whole game. Everything that shapes the world,
-// the car feel or the look of the night lives here so the modules stay readable.
+// Central tuning for world, car feel and look, so the modules stay readable.
 
 export const CONFIG = {
   seed: 1,
@@ -16,10 +15,22 @@ export const CONFIG = {
   fogFar: 340,
   fogColor: [0.062, 0.068, 0.115],
 
+  // Camera rig, in metres (per-speed terms in m/s). The chase cam sits `height`
+  // above the road and `backDistance` behind the car at rest, then pulls back as
+  // speed builds. `drawDistance` must stay beyond `fogFar` or the fog never
+  // closes.
+  camera: {
+    height: 3.45,
+    heightPerSpeed: 0.014,
+    backDistance: 8.4,
+    backPerSpeed: 0.062,
+    near: 0.12,
+    drawDistance: 720,
+  },
+
   render: {
     maxPixelRatio: 2,
-    // Software rasterisation in CI: keep the backing store modest and let CSS
-    // stretch it. The capture harness downsamples to 1280x720 anyway.
+    // Software rasterisation in CI: a modest backing store, CSS stretches it.
     maxPixels: 1.9e6,
     bloomThreshold: 0.70,
     bloomStrength: 0.90,
@@ -70,6 +81,5 @@ export const PAINTS = [
 
 export const FOG_VEC3 = new Float32Array(CONFIG.fogColor);
 
-// Fixed simulation step: physics and mission timers advance in whole steps so a
-// slow frame never changes the outcome.
+// Fixed simulation step, so a slow frame never changes the outcome.
 export const STEP = 1 / 60;

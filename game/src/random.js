@@ -1,12 +1,11 @@
 // Night City final pass: crowd streaming, dashboard radar and wet asphalt.
-// Deterministic pseudo random numbers. The whole city, the rain and every
-// window light are derived from one seed, so ?shot=N always renders the same
-// picture and ?seed=K gives a different but repeatable city.
+// Deterministic pseudo random numbers: the city, the rain and every lit window
+// come from one seed, so ?shot=N renders the same picture every time.
 
 export class Rng {
   constructor(seed = 1) {
-    // A small integer LCG (Numerical Recipes constants). 32-bit, so it is
-    // stable across engines and runs.
+    // A small integer LCG (Numerical Recipes constants), 32-bit, so it is stable
+    // across engines.
     this.state = (seed >>> 0) || 0x9e3779b9;
   }
 
@@ -36,8 +35,7 @@ export class Rng {
   }
 }
 
-// Fold a few integers into one seed, so sub-systems can be seeded independently
-// while still being driven by the master seed.
+// Fold a few integers into one seed, so a sub-system can be seeded on its own.
 export function mixSeed(...parts) {
   let h = 0x811c9dc5;
   for (const part of parts) {

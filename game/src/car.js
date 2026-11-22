@@ -1,16 +1,14 @@
-// Night City final pass: crowd streaming, dashboard radar and wet asphalt.
-// Player car: arcade driving physics (forward/lateral velocity split, grip,
-// handbrake drift) and the renderer that draws the body, glass, wheels,
-// emissive lamps, volumetric headlight cones and the light pools they cast.
+// Player car: arcade physics and the renderer for body, glass, wheels, lamps.
 
 import { CONFIG } from './config.js';
-import { LOC, createProgram, makeMesh, drawMesh } from './gl.js';
+import { LOC, QUAD, createProgram, makeMesh, drawMesh } from './gl.js';
 import {
-  TAU, clamp, damp, wrapAngle, m4, m4mul, m4trs, m4translate, m4rotY,
+  TAU, clamp, clamp01, damp, wrapAngle, m4, m4mul, m4trs, m4translate, m4rotY,
 } from './math.js';
 import { resolveCollisions } from './city.js';
+import { pushBox } from './geom.js';
 
-// ------------------------------------------------------------- physics ----
+// physics
 
 export class Car {
   constructor({ x = 0, z = 0, heading = 0, paint, police = false }) {
@@ -56,10 +54,10 @@ export class Car {
     let ls = this.vel[0] * right[0] + this.vel[2] * right[2];
 
     if (throttle > 0) {
-      fs += c.accel * (1 - clamp(fs / c.maxSpeed, 0, 1)) * throttle * dt;
+      fs += c.accel * (1 - clamp01(fs / c.maxSpeed)) * throttle * dt;
     } else if (throttle < 0) {
       if (fs > 0.4) fs -= 24 * dt; // brake
-      else fs += c.reverseAccel * throttle * (1 - clamp(-fs / c.maxReverse, 0, 1)) * dt;
+      else fs += c.reverseAccel * throttle * (1 - clamp01(-fs / c.maxReverse)) * dt;
     }
 
     fs -= fs * c.drag * dt;
@@ -107,7 +105,7 @@ export class Car {
 
     this.speed = Math.hypot(this.vel[0], this.vel[2]);
     this.roll = damp(this.roll, clamp(-yawRate * fs * 0.0075, -0.17, 0.17), 7, dt);
-    this.pitch = damp(this.pitch, clamp(throttle * -0.035 * clamp(fs / 18, 0, 1), -0.05, 0.05), 5, dt);
+    this.pitch = damp(this.pitch, clamp(throttle * -0.035 * clamp01(fs / 18), -0.05, 0.05), 5, dt);
     this.brake = throttle < 0 && fs > 1 ? 1 : 0;
     this.wheelSpin += fs * dt * 1.6;
     this.shake = Math.max(0, this.shake - dt * 3);
@@ -126,29 +124,7 @@ export class Car {
   }
 }
 
-// ------------------------------------------------------------ geometry ----
-
-const FACES = [
-  { n: [1, 0, 0], v: [[1, -1, 1], [1, -1, -1], [1, 1, -1], [1, 1, 1]] },
-  { n: [-1, 0, 0], v: [[-1, -1, -1], [-1, -1, 1], [-1, 1, 1], [-1, 1, -1]] },
-  { n: [0, 0, 1], v: [[-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]] },
-  { n: [0, 0, -1], v: [[1, -1, -1], [-1, -1, -1], [-1, 1, -1], [1, 1, -1]] },
-  { n: [0, 1, 0], v: [[-1, 1, 1], [1, 1, 1], [1, 1, -1], [-1, 1, -1]] },
-  { n: [0, -1, 0], v: [[-1, -1, -1], [1, -1, -1], [1, -1, 1], [-1, -1, 1]] },
-];
-
-function pushBox(P, N, PT, I, cx, cy, cz, sx, sy, sz, part) {
-  const hx = sx / 2, hy = sy / 2, hz = sz / 2;
-  for (const f of FACES) {
-    const base = P.length / 3;
-    for (const v of f.v) {
-      P.push(cx + v[0] * hx, cy + v[1] * hy, cz + v[2] * hz);
-      N.push(f.n[0], f.n[1], f.n[2]);
-      PT.push(part);
-    }
-    I.push(base, base + 1, base + 2, base, base + 2, base + 3);
-  }
-}
+// geometry
 
 function pushWheel(P, N, PT, I, cx, cy, cz, radius, halfWidth, part, segs = 12) {
   const base = P.length / 3;
@@ -189,9 +165,51 @@ function pushWheel(P, N, PT, I, cx, cy, cz, radius, halfWidth, part, segs = 12) 
   }
 }
 
-// A box whose top face can be pulled in on either axis. Straight boxes read as
-// bricks; what makes a shape read as a car is the shoulder line that tapers in
-// toward the roof and the nose that narrows ahead of the windscreen.
+// Arch: a thin band swept around the top half of the wheel, so it follows the tyre.
+function pushArch(P, N, PT, I, wx, wy, wz, radius, halfWidth, thickness, part, segs = 9) {
+  const a0 = -0.16;
+  const a1 = Math.PI + 0.16;
+  const ring = [];
+  for (let i = 0; i <= segs; i++) {
+    const a = a0 + (a1 - a0) * (i / segs);
+    const sa = Math.sin(a), ca = Math.cos(a);
+    ring.push({
+      oy: wy + sa * (radius + thickness), oz: wz + ca * (radius + thickness),
+      iy: wy + sa * radius, iz: wz + ca * radius,
+      ny: sa, nz: ca,
+    });
+  }
+  for (let i = 0; i < segs; i++) {
+    const p = ring[i], q = ring[i + 1];
+    // Outer skin, facing away from the axle.
+    let base = P.length / 3;
+    P.push(wx - halfWidth, p.oy, p.oz, wx + halfWidth, p.oy, p.oz,
+      wx + halfWidth, q.oy, q.oz, wx - halfWidth, q.oy, q.oz);
+    for (let k = 0; k < 4; k++) { N.push(0, (p.ny + q.ny) * 0.5, (p.nz + q.nz) * 0.5); PT.push(part); }
+    I.push(base, base + 1, base + 2, base, base + 2, base + 3);
+
+    // Rims on both sides, so the flare has thickness instead of being paper.
+    for (const s of [-1, 1]) {
+      base = P.length / 3;
+      const x = wx + s * halfWidth;
+      P.push(x, p.oy, p.oz, x, p.iy, p.iz, x, q.iy, q.iz, x, q.oy, q.oz);
+      for (let k = 0; k < 4; k++) { N.push(s, 0, 0); PT.push(part); }
+      if (s > 0) I.push(base, base + 1, base + 2, base, base + 2, base + 3);
+      else I.push(base, base + 2, base + 1, base, base + 3, base + 2);
+    }
+  }
+  // Caps at the two ends of the arc keep the band from looking sliced open.
+  for (const i of [0, segs]) {
+    const p = ring[i];
+    const base = P.length / 3;
+    P.push(wx - halfWidth, p.oy, p.oz, wx + halfWidth, p.oy, p.oz,
+      wx + halfWidth, p.iy, p.iz, wx - halfWidth, p.iy, p.iz);
+    for (let k = 0; k < 4; k++) { N.push(0, p.ny, p.nz); PT.push(part); }
+    I.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  }
+}
+
+// A box whose top face can taper on either axis: what reads as a car, not a brick.
 function pushTaperBox(P, N, PT, I, cx, cy, cz, sx, sy, sz, part, topX = 1, topZ = 1) {
   const bx = sx / 2, bz = sz / 2, hy = sy / 2;
   const tx = bx * topX, tz = bz * topZ;
@@ -219,10 +237,10 @@ function pushTaperBox(P, N, PT, I, cx, cy, cz, sx, sy, sz, part, topX = 1, topZ 
   }
 }
 
-// The car is assembled from primitives rather than loaded from a mesh, so every
-// shape here has to earn its vertices: the body is tapered so the shoulder line
-// pulls in toward the roof, and the small parts (mirrors, arch flares, plates,
-// exhausts) are what stop it reading as a stack of boxes at chase distance.
+// Lamp housing in body space: boxes, cones and glows all read from here.
+const LAMP = { x: 0.62, y: 1.02, z: 2.16 };
+
+// Built from primitives: a tapered body plus mirrors, flares, plates, exhausts.
 function buildCarGeometry(police) {
   const P = [], N = [], PT = [], I = [];
   const BODY = 0, GLASS = 1, WHEEL = 2, HEAD = 3, TAIL = 4, TRIM = 5, RED = 6, BLUE = 7;
@@ -242,21 +260,18 @@ function buildCarGeometry(police) {
   pushBox(P, N, PT, I, 0.60, 1.22, -2.05, 0.08, 0.26, 0.08, TRIM);
   pushBox(P, N, PT, I, 0, 0.86, 2.17, 0.92, 0.18, 0.08, TRIM);
 
-  for (const sx of [-0.62, 0.62]) {
-    pushBox(P, N, PT, I, sx, 1.02, 2.16, 0.42, 0.16, 0.10, HEAD);
-    pushBox(P, N, PT, I, sx, 1.04, -2.16, 0.46, 0.14, 0.10, TAIL);
-    // A dark strip under each lamp so the light unit has an edge to sit on
-    // instead of floating on the bodywork, which is what gave the front end
-    // its pasted-on look at chase distance.
-    pushBox(P, N, PT, I, sx, 0.90, 2.17, 0.50, 0.05, 0.09, TRIM);
+  for (const sx of [-LAMP.x, LAMP.x]) {
+    pushBox(P, N, PT, I, sx, LAMP.y, LAMP.z, 0.42, 0.16, 0.10, HEAD);
+    pushBox(P, N, PT, I, sx, LAMP.y + 0.02, -2.16, 0.46, 0.14, 0.10, TAIL);
+    // A dark strip under each lamp gives the light unit an edge to sit on.
+    pushBox(P, N, PT, I, sx, LAMP.y - 0.12, 2.17, 0.50, 0.05, 0.09, TRIM);
   }
 
-  // The small parts that separate a car from a wedge on wheels: door mirrors,
-  // arch flares over each wheel, plates, exhaust tips, grille bars and wipers.
+  // Mirrors, arch flares, plates, exhaust tips, grille bars, wipers.
   for (const sx of [-1, 1]) {
     pushTaperBox(P, N, PT, I, sx * 0.90, 1.26, 0.72, 0.24, 0.11, 0.17, TRIM, 0.7, 0.8);
-    pushBox(P, N, PT, I, sx * 0.98, 0.62, 1.42, 0.10, 0.30, 0.62, TRIM);
-    pushBox(P, N, PT, I, sx * 0.98, 0.62, -1.42, 0.10, 0.30, 0.62, TRIM);
+    pushArch(P, N, PT, I, sx * 0.95, 0.40, 1.42, 0.42, 0.055, 0.075, TRIM);
+    pushArch(P, N, PT, I, sx * 0.95, 0.40, -1.42, 0.42, 0.055, 0.075, TRIM);
     pushBox(P, N, PT, I, sx * 0.55, 0.36, -2.24, 0.16, 0.10, 0.10, TRIM);
     pushBox(P, N, PT, I, sx * 0.72, 1.14, 2.12, 0.30, 0.05, 0.06, TRIM);
   }
@@ -286,11 +301,11 @@ function buildCarGeometry(police) {
   };
 }
 
-// A hollow cone from the headlamps: cheap stand-in for volumetric light.
+// A hollow cone from the headlamps: cheap volumetric light, apex on the lens.
 function buildConeGeometry() {
   const P = [], N = [], T = [], I = [];
   const segs = 20;
-  const apex = [0, 0.98, 2.10];
+  const apex = [0, LAMP.y, LAMP.z];
   const end = [0, -0.85, 21.0];
   const radius = 5.6;
   const dir = [end[0] - apex[0], end[1] - apex[1], end[2] - apex[2]];
@@ -301,9 +316,9 @@ function buildConeGeometry() {
   for (let i = 0; i <= segs; i++) {
     const a = (i / segs) * TAU;
     const ca = Math.cos(a), sa = Math.sin(a);
-    // Two rings: a small one at the lamp, the wide one far ahead.
+    // Two rings: a near-point at the lamp, the wide one far ahead.
     for (let r = 0; r < 2; r++) {
-      const t = r === 0 ? 0.02 : 1;
+      const t = r === 0 ? 0.004 : 1;
       const cx = apex[0] + dir[0] * dl * t;
       const cy = apex[1] + dir[1] * dl * t;
       const cz = apex[2] + dir[2] * dl * t;
@@ -325,7 +340,7 @@ function buildConeGeometry() {
   };
 }
 
-// ------------------------------------------------------------ shaders -----
+// shaders
 
 const CAR_VS = `#version 300 es
 layout(location=0) in vec3 aPos;
@@ -457,7 +472,7 @@ void main() {
   fragColor = vec4(uColor * a, a);
 }`;
 
-// ----------------------------------------------------------- renderer -----
+// renderer
 
 const _model = m4();
 const _flat = m4();
@@ -490,8 +505,7 @@ export class CarRenderer {
       indices: cone.indices,
     });
 
-    const quad = new Float32Array([-0.5, -0.5, 0.5, -0.5, 0.5, 0.5, -0.5, -0.5, 0.5, 0.5, -0.5, 0.5]);
-    this.quad = makeMesh(gl, { attributes: [{ name: 'aPos', loc: LOC.pos, size: 2, data: quad }] });
+    this.quad = makeMesh(gl, { attributes: [{ name: 'aPos', loc: LOC.pos, size: 2, data: QUAD }] });
 
     this.carProg = createProgram(gl, CAR_VS, CAR_FS, { aPos: LOC.pos, aNormal: LOC.normal, aPart: LOC.part });
     this.coneProg = createProgram(gl, CONE_VS, CONE_FS, { aPos: LOC.pos, aNormal: LOC.normal, aT: LOC.uv });
@@ -616,7 +630,7 @@ export class CarRenderer {
       if (!car.lightsOn) continue;
       const model = this.modelFor(car, _flat);
       gl.uniformMatrix4fv(this.coneProg.u('uModel'), false, model);
-      for (const sx of [-0.62, 0.62]) {
+      for (const sx of [-LAMP.x, LAMP.x]) {
         gl.uniform3f(this.coneProg.u('uOffset'), sx, 0, 0);
         drawMesh(gl, this.coneMesh);
       }
@@ -629,14 +643,14 @@ export class CarRenderer {
     for (const car of cars) {
       const fwd = car.forward();
       const right = [fwd[2], 0, -fwd[0]];
-      for (const sx of [-0.62, 0.62]) {
+      for (const sx of [-LAMP.x, LAMP.x]) {
         if (car.lightsOn) {
-          const hx = car.pos[0] + fwd[0] * 2.2 + right[0] * sx;
-          const hz = car.pos[2] + fwd[2] * 2.2 + right[2] * sx;
-          glows.add(hx, 1.02, hz, 1.5, [1.0, 0.92, 0.75], 0.85);
+          const hx = car.pos[0] + fwd[0] * LAMP.z + right[0] * sx;
+          const hz = car.pos[2] + fwd[2] * LAMP.z + right[2] * sx;
+          glows.add(hx, LAMP.y, hz, 1.5, [1.0, 0.92, 0.75], 0.85);
         }
-        const tx = car.pos[0] - fwd[0] * 2.2 + right[0] * sx;
-        const tz = car.pos[2] - fwd[2] * 2.2 + right[2] * sx;
+        const tx = car.pos[0] - fwd[0] * 2.16 + right[0] * sx;
+        const tz = car.pos[2] - fwd[2] * 2.16 + right[2] * sx;
         glows.add(tx, 1.05, tz, 1.1, [1.0, 0.12, 0.08], 0.55 + car.brake * 0.4);
       }
       if (car.police) {

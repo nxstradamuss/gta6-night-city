@@ -1,9 +1,9 @@
 // Night City final pass: crowd streaming, dashboard radar and wet asphalt.
-// Thin WebGL2 helpers: shader compilation with loud errors, VAO/mesh creation
-// (static and instanced), textures, framebuffers and draw helpers.
+// Thin WebGL2 helpers: shaders with loud errors, VAO/mesh creation, textures,
+// framebuffers and draws.
 
-// Attribute locations are fixed across every program so one VAO can be bound
-// to any pipeline that shares the same vertex layout.
+// Attribute locations are fixed across every program, so one VAO fits any
+// pipeline with the same vertex layout.
 export const LOC = {
   pos: 0,
   normal: 1,
@@ -15,24 +15,8 @@ export const LOC = {
   iparam: 7,
 };
 
-export const GLSL_HASH = `
-float hash11(float p) {
-  p = fract(p * 0.1031);
-  p *= p + 33.33;
-  p *= p + p;
-  return fract(p);
-}
-float hash21(vec2 p) {
-  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.x + p3.y) * p3.z);
-}
-float hash31(vec3 p3) {
-  p3 = fract(p3 * 0.1031);
-  p3 += dot(p3, p3.zyx + 31.32);
-  return fract((p3.x + p3.y) * p3.z);
-}
-`;
+// Unit quad, centred on the origin, shared by every instanced sprite pass.
+export const QUAD = new Float32Array([-0.5, -0.5, 0.5, -0.5, 0.5, 0.5, -0.5, -0.5, 0.5, 0.5, -0.5, 0.5]);
 
 export function compileShader(gl, type, source) {
   const sh = gl.createShader(type);
@@ -45,6 +29,28 @@ export function compileShader(gl, type, source) {
     throw new Error(`shader compile failed (${type === gl.VERTEX_SHADER ? 'vs' : 'fs'}): ${log}\n${numbered}`);
   }
   return sh;
+}
+
+// Uniform locations are resolved once at link and then only read back. The
+// program is the WeakMap key, so the table dies with it.
+const uniformCache = new WeakMap();
+
+// Walk the active uniform list once to fill the cache; names optimised away stay
+// null and the caller's setter skips them.
+function warmUniformCache(gl, prog) {
+  const cache = new Map();
+  uniformCache.set(prog, cache);
+  const count = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS) || 0;
+  for (let i = 0; i < count; i++) {
+    const info = gl.getActiveUniform(prog, i);
+    if (!info) continue;
+    // Array uniforms are reported as "name[0]"; store both spellings.
+    const bare = info.name.replace(/\[0\]$/, '');
+    const loc = gl.getUniformLocation(prog, info.name);
+    cache.set(info.name, loc);
+    if (bare !== info.name) cache.set(bare, loc);
+  }
+  return cache;
 }
 
 export function createProgram(gl, vsSource, fsSource, bindings = {}) {
@@ -63,19 +69,19 @@ export function createProgram(gl, vsSource, fsSource, bindings = {}) {
   gl.deleteShader(vs);
   gl.deleteShader(fs);
 
-  const cache = new Map();
+  const cache = warmUniformCache(gl, prog);
   return {
     prog,
+    uniformCount: cache.size,
     use() {
       gl.useProgram(prog);
       return this;
     },
     u(name) {
-      let loc = cache.get(name);
-      if (loc === undefined) {
-        loc = gl.getUniformLocation(prog, name);
-        cache.set(name, loc);
-      }
+      if (cache.has(name)) return cache.get(name);
+      // Fallback for names the active-uniform walk cannot see; memoised.
+      const loc = gl.getUniformLocation(prog, name);
+      cache.set(name, loc);
       return loc;
     },
   };

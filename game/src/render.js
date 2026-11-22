@@ -1,17 +1,17 @@
 // Night City final pass: crowd streaming, dashboard radar and wet asphalt.
-// Frame assembly: one place that owns the GL context, the render resolution and
-// the order the passes run in. Sky, wet asphalt, towers, lamps, cars, neon,
-// mission beacons, rain, then the bloom composite. The ground pass is handed the
-// scene clock as well as the scene, because the wet asphalt animates: rain
-// ripples and the neon smears both read uTime. Street furniture and the rooftop
-// clutter ride one instanced batch, so the pass count does not grow with the
-// amount of detail on screen.
+// Frame assembly: owns the GL context, the resolution and the pass order. The
+// ground pass gets the scene clock too, because the wet asphalt animates.
 
 import { CONFIG } from './config.js';
 import { makeNoiseTexture } from './gl.js';
 import { SkyRenderer, RainRenderer, GlowBatch, BeaconRenderer, PostFX } from './fx.js';
 import { CityRenderer } from './city.js';
 import { CarRenderer } from './car.js';
+
+// Pass order as data, so a new pass has to be slotted in deliberately instead of
+// landing wherever it was typed: ground, city, furniture, crowd, cars, then the
+// light added on top (glow, beacons, rain), then the bloom composite.
+const DRAW_ORDER = ['ground', 'city', 'props', 'peds', 'cars', 'hud'];
 
 export class Renderer {
   constructor(canvas, rng) {
@@ -50,8 +50,8 @@ export class Renderer {
     this.city = new CityRenderer(this.gl, city, this.noiseTex);
   }
 
-  // Render at a capped backing-store size: the canvas is stretched to the
-  // window by CSS, so a software rasteriser still gets a frame out in time.
+  // Capped backing-store size: CSS stretches the canvas, so a software
+  // rasteriser still gets a frame out in time.
   resize() {
     const canvas = this.canvas;
     const dpr = Math.min(window.devicePixelRatio || 1, CONFIG.render.maxPixelRatio);
@@ -87,28 +87,49 @@ export class Renderer {
 
     this.sky.draw(cam, time);
 
-    this.city.drawGround(cam, vp, scene, time);
-    this.city.drawBuildings(cam, vp);
-    this.city.drawLamps(cam, vp);
-    this.city.drawProps(cam, vp);
-    // Pedestrians ride their own instanced pass so the crowd can animate without
-    // rebuilding the static street furniture every frame.
-    if (scene.peds) scene.peds.draw(cam, vp);
-
-    // Cars contribute their own headlight pools to the same glow batch.
-    this.glows.begin();
-    this.cars.draw(scene.cars, cam, vp, time, this.glows);
-    this.city.addGlows(this.glows, cam, 180);
-
-    this.city.drawSigns(cam, vp);
-
-    for (let i = 0; i < scene.markers.length; i++) {
-      this.beacon.draw(vp, scene.markers[i], time);
+    for (let i = 0; i < DRAW_ORDER.length; i++) {
+      this._pass(DRAW_ORDER[i], cam, vp, scene, time);
     }
 
-    this.rain.draw(cam, vp, time);
-    this.glows.draw(cam, vp);
-
     this.post.end(time);
+  }
+
+  _pass(name, cam, vp, scene, time) {
+    switch (name) {
+      case 'ground':
+        this.city.drawGround(cam, vp, scene, time);
+        break;
+      case 'city':
+        this.city.drawBuildings(cam, vp);
+        this.city.drawLamps(cam, vp);
+        this.city.drawSigns(cam, vp);
+        break;
+      case 'props':
+        this.city.drawProps(cam, vp);
+        break;
+      case 'peds':
+        // The crowd rides its own instanced pass so it animates without
+        // rebuilding the static furniture.
+        if (scene.peds) scene.peds.draw(cam, vp);
+        break;
+      case 'cars':
+        // Cars add their headlight pools to the shared glow batch, resolved in
+        // the hud pass once every light is collected.
+        this.glows.begin();
+        this.cars.draw(scene.cars, cam, vp, time, this.glows);
+        this.city.addGlows(this.glows, cam, 180);
+        break;
+      case 'hud':
+        for (let i = 0; i < scene.markers.length; i++) {
+          this.beacon.draw(vp, scene.markers[i], time);
+        }
+        // Rain last of the world passes so streaks read in front of the glow
+        // they fall through; length follows the car's speed.
+        this.rain.draw(cam, vp, time, scene.speed || 0);
+        this.glows.draw(cam, vp);
+        break;
+      default:
+        throw new Error(`Unknown render pass: ${name}`);
+    }
   }
 }

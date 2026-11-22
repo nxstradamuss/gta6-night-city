@@ -1,12 +1,5 @@
-// Night City final pass: crowd streaming, dashboard radar and wet asphalt.
-// Boot and the one loop: read input, advance the world in fixed 1/60 s steps,
-// draw a frame. ?seed=N picks the city, ?shot=1|2|3 stages a frozen scene for
-// the screenshots and stops simulating so the picture is byte-stable. The scene
-// handed to the renderer carries the player car's headlight position and aim, so
-// the ground shader can throw the cone onto the asphalt instead of faking a
-// round light pool under the bumper. The aim is read every frame from the car's
-// heading, so the cone swings with the steering rather than pointing where the
-// body happens to be.
+// Boot and the one loop: input, fixed 1/60 s steps, draw. ?seed=N picks the
+// city, ?shot=1|2|3 stages a frozen scene.
 
 import { CONFIG, PAINTS, STEP } from './config.js';
 import { Rng, mixSeed } from './random.js';
@@ -51,6 +44,8 @@ export class Game {
 
     this.traffic = buildTraffic(this.rng, this.city, 30);
     this.cops = [];
+    // Radar police dots: refilled every frame, never allocated per paint.
+    this._copDots = [];
     this.wanted = 0;
     this.cash = 0;
     this.time = 0;
@@ -61,15 +56,14 @@ export class Game {
 
     this.hud = new Hud();
     this.input = new Input();
-    // A crowd on the pavements and a radar on the dash: the two things that make
-    // a street feel inhabited rather than rendered.
+    // A crowd on the pavements, a radar on the dash.
     this.peds = new Pedestrians(this.renderer.gl, this.rng, 96);
     this.minimap = new Minimap(this.hud.root);
     this.missions = new Missions(this);
     this.missions.start(0);
   }
 
-  // ---------------------------------------------------------------- events --
+  // events
 
   toast(message, ms) {
     if (this.shotMode) return; // stills shouldn't carry a banner
@@ -113,7 +107,7 @@ export class Game {
     }
   }
 
-  // ---------------------------------------------------------------- update --
+  // update
 
   update(dt, controls) {
     const c = controls ?? {
@@ -170,28 +164,46 @@ export class Game {
       cash: this.cash,
     });
 
-    // The radar follows the car, not the camera: the arrow is the player, so the
-    // map stays legible while the chase cam swings around behind.
+    // Radar follows the car, not the camera, so it stays legible as the cam swings.
     this._paintMinimap(dt);
 
     if (this.input.wasPressed('KeyR')) this.respawn();
   }
 
-  // Drawn from both the update and the render path: in shot mode the game is
-  // staged once and only repainted, so a HUD element that lives purely in
-  // update() would never appear in a capture.
+  // Dots come from the live cruiser list: caching them would draw a frame behind.
+  _policeDots() {
+    const dots = this._copDots;
+    dots.length = 0;
+    const p = this.player;
+    for (let i = 0; i < this.cops.length; i++) {
+      const cop = this.cops[i];
+      const dx = cop.pos[0] - p.pos[0];
+      const dz = cop.pos[2] - p.pos[2];
+      dots.push({
+        pos: cop.pos,
+        dist: Math.hypot(dx, dz),
+        speed: cop.speed,
+        chasing: cop.siren > 0,
+      });
+    }
+    // Nearest first, so the minimap can just take the head of the list.
+    dots.sort((a, b) => a.dist - b.dist);
+    return dots;
+  }
+
+  // Drawn from update and render: shot mode stages once and only repaints.
   _paintMinimap(dt) {
     const p = this.player;
     const obj = this.missions.activeMarkers();
     this.minimap.update({
       x: p.pos[0], z: p.pos[2], heading: p.heading, dt,
       traffic: this.traffic,
-      cops: this.cops,
+      cops: this._policeDots(),
       marker: obj.length ? { x: obj[0].x, z: obj[0].z } : null,
     });
   }
 
-  // ----------------------------------------------------------------- scene --
+  // scene
 
   scene() {
     const cars = [this.player];
@@ -205,7 +217,7 @@ export class Game {
       markers.push({ x: m.x, z: m.z, radius: m.r * 0.75, height: 30, color: m.color });
     }
 
-    // Two analytic ground lights: the player's headlight pool and the nearest lamp.
+    // Two analytic ground lights: headlight pool and nearest lamp.
     const p = this.player;
     const f = p.forward();
     const lights = [{
@@ -235,9 +247,10 @@ export class Game {
       markers,
       lights,
       peds: this.peds,
-      // The headlight cone is painted straight onto the asphalt in the ground
-      // shader: a point light gives a round pool, but what sells a night drive
-      // is the long wedge of light that stretches down the wet road ahead.
+      // Signed road speed in m/s: rain stretches by it, the HUD reads the same.
+      speed: p.speed,
+      // The headlight cone is painted in the ground shader: a point light gives a
+      // round pool, but the long wedge down the wet road sells a night drive.
       headlight: {
         x: p.pos[0], z: p.pos[2],
         dx: f[0], dz: f[2],
@@ -248,13 +261,12 @@ export class Game {
 
   render() {
     this._paintMinimap(STEP);
-    // Keep the crowd around the car even on a frozen stage, where update() is
-    // never ticked after the shot is set up.
+    // Keep the crowd around the car even on a frozen stage.
     this.peds.stream(this.player.pos[0], this.player.pos[2]);
     this.renderer.render(this.camera, this.scene(), this.time);
   }
 
-  // ------------------------------------------------------------------ loop --
+  // loop
 
   start() {
     let last = performance.now();

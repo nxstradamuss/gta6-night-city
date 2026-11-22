@@ -1,15 +1,10 @@
 // Night City final pass: crowd streaming, dashboard radar and wet asphalt.
-// Atmosphere and post processing: gradient night sky with stars and a moon,
-// rain streaks, additive glow sprites, mission beacons, and the bloom +
-// colour-grade composite that gives the whole frame its neon haze.
+// Atmosphere and post: night sky with stars and a moon, rain, additive glow
+// sprites, mission beacons, and the bloom composite that gives the neon haze.
 
 import { CONFIG } from './config.js';
-import { LOC, GLSL_HASH, createProgram, makeMesh, makeFullscreenQuad, drawMesh, createFramebuffer, resizeFramebuffer } from './gl.js';
-
-const FOG_UNIFORMS = `
-uniform vec3 uFogColor;
-uniform vec2 uFog;
-`;
+import { LOC, QUAD, createProgram, makeMesh, makeFullscreenQuad, drawMesh, createFramebuffer, resizeFramebuffer } from './gl.js';
+import { GLSL_HASH } from './glsl.js';
 
 // ---------------------------------------------------------------- sky ----
 
@@ -111,6 +106,7 @@ uniform vec3 uUp;
 uniform float uTime;
 uniform float uRange;
 uniform float uHeight;
+uniform float uSpeed;
 out vec2 vUv;
 out float vFade;
 void main() {
@@ -119,7 +115,10 @@ void main() {
   p.xz = uCam.xz + mod(p.xz - uCam.xz + uRange * 0.5, uRange) - uRange * 0.5;
   vec3 fall = normalize(vec3(0.16, -1.0, 0.06));
   vec3 side = normalize(cross(fall, normalize(uCam - p)));
-  vec3 wp = p + side * aPos.x * 0.055 + fall * aPos.y * iParam.y;
+  // Streaks stretch with road speed: at a standstill a drop is a short dash, at
+  // 200 km/h it smears into a long line. 1.0 is parked, ~2.4 at top speed.
+  float stretch = 1.0 + uSpeed * 0.026;
+  vec3 wp = p + side * aPos.x * 0.055 + fall * aPos.y * iParam.y * stretch;
   vUv = aPos + 0.5;
   float d = length(p.xz - uCam.xz);
   vFade = (1.0 - smoothstep(uRange * 0.22, uRange * 0.55, d)) * smoothstep(0.0, 2.5, p.y);
@@ -143,7 +142,6 @@ export class RainRenderer {
   constructor(gl, rng) {
     this.gl = gl;
     this.count = CONFIG.rain.count;
-    const corners = new Float32Array([-0.5, -0.5, 0.5, -0.5, 0.5, 0.5, -0.5, -0.5, 0.5, 0.5, -0.5, 0.5]);
     const inst = new Float32Array(this.count * 5);
     for (let i = 0; i < this.count; i++) {
       inst[i * 5 + 0] = rng.float(-CONFIG.rain.range, CONFIG.rain.range);
@@ -153,7 +151,7 @@ export class RainRenderer {
       inst[i * 5 + 4] = rng.float(0.5, 1.5); // streak length
     }
     // One interleaved instance buffer holds position, speed and length.
-    this._buildInstanced(gl, corners, inst);
+    this._buildInstanced(gl, QUAD, inst);
     this.prog = createProgram(gl, RAIN_VS, RAIN_FS, { aPos: LOC.pos, iPos: LOC.ipos, iParam: LOC.iparam });
   }
 
@@ -179,7 +177,7 @@ export class RainRenderer {
     this.mesh = { vao, count: 6, indexCount: 0, ibo: null, mode: gl.TRIANGLES };
   }
 
-  draw(cam, vp, time) {
+  draw(cam, vp, time, speed = 0) {
     const gl = this.gl;
     this.prog.use();
     gl.uniformMatrix4fv(this.prog.u('uVP'), false, vp);
@@ -189,6 +187,9 @@ export class RainRenderer {
     gl.uniform1f(this.prog.u('uTime'), time);
     gl.uniform1f(this.prog.u('uRange'), CONFIG.rain.range);
     gl.uniform1f(this.prog.u('uHeight'), CONFIG.rain.height);
+    // Road speed in m/s from the player car: the streak stretch is driven by how
+    // fast the camera travels.
+    gl.uniform1f(this.prog.u('uSpeed'), Math.max(0, speed));
     gl.uniform3f(this.prog.u('uColor'), 0.52, 0.66, 0.95);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);
@@ -248,12 +249,11 @@ export class GlowBatch {
     this.capacity = capacity;
     this.data = new Float32Array(capacity * GLOW_STRIDE);
     this.count = 0;
-    const corners = new Float32Array([-0.5, -0.5, 0.5, -0.5, 0.5, 0.5, -0.5, -0.5, 0.5, 0.5, -0.5, 0.5]);
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
     const cbuf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, cbuf);
-    gl.bufferData(gl.ARRAY_BUFFER, corners, gl.STATIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, QUAD, gl.STATIC_DRAW);
     gl.enableVertexAttribArray(LOC.pos);
     gl.vertexAttribPointer(LOC.pos, 2, gl.FLOAT, false, 0, 0);
     this.ibuf = gl.createBuffer();

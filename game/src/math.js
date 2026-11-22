@@ -1,13 +1,14 @@
 // Night City final pass: crowd streaming, dashboard radar and wet asphalt.
-// Minimal column-major matrix and vector helpers. Only what the game needs:
-// no dependencies, no allocation-heavy maths in the frame loop.
+// Minimal column-major matrix and vector helpers, no dependencies.
 
 export const TAU = Math.PI * 2;
 
 export const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+// The 0..1 case earns its own name and its own cheap comparison chain.
+export const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 export const lerp = (a, b, t) => a + (b - a) * t;
 export const smoothstep = (e0, e1, x) => {
-  const t = clamp((x - e0) / (e1 - e0), 0, 1);
+  const t = clamp01((x - e0) / (e1 - e0));
   return t * t * (3 - 2 * t);
 };
 // Framerate independent exponential approach.

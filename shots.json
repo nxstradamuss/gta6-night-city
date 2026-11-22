@@ -1,4 +1,3 @@
-// Night City final pass: crowd streaming, dashboard radar and wet asphalt.
 [
   { "name": "1-city.jpg", "query": "?shot=1&seed=1" },
   { "name": "2-chase.jpg", "query": "?shot=2&seed=1" },
