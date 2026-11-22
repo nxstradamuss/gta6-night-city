@@ -27,7 +27,7 @@ const CSS = `
 `;
 
 export class Minimap {
-  constructor(parent, size = 178) {
+  constructor(parent, size = 192) {
     const style = document.createElement('style');
     style.textContent = CSS;
     document.head.appendChild(style);

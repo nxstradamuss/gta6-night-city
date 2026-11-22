@@ -391,7 +391,7 @@ void main() {
   float hSide = abs(hp.x * uHeadDir.y - hp.y * uHeadDir.x);
   float wedge = smoothstep(0.0, 2.2, hFwd) * smoothstep(30.0, 6.0, hFwd);
   wedge *= smoothstep(8.5, 1.2, hSide + max(hFwd, 0.0) * 0.30);
-  col += vec3(1.0, 0.93, 0.76) * wedge * uHeadOn * (0.30 + wet * 0.60);
+  col += vec3(1.0, 0.93, 0.76) * wedge * uHeadOn * (0.36 + wet * 0.70);
 
   // Standing water. Where the noise field says a puddle sits, the asphalt turns
   // into a shallow mirror that picks up the sky and the neon hanging above it.

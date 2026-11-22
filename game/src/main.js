@@ -63,7 +63,7 @@ export class Game {
     this.input = new Input();
     // A crowd on the pavements and a radar on the dash: the two things that make
     // a street feel inhabited rather than rendered.
-    this.peds = new Pedestrians(this.renderer.gl, this.rng, 64);
+    this.peds = new Pedestrians(this.renderer.gl, this.rng, 96);
     this.minimap = new Minimap(this.hud.root);
     this.missions = new Missions(this);
     this.missions.start(0);
