@@ -218,6 +218,10 @@ function pushTaperBox(P, N, PT, I, cx, cy, cz, sx, sy, sz, part, topX = 1, topZ 
   }
 }
 
+// The car is assembled from primitives rather than loaded from a mesh, so every
+// shape here has to earn its vertices: the body is tapered so the shoulder line
+// pulls in toward the roof, and the small parts (mirrors, arch flares, plates,
+// exhausts) are what stop it reading as a stack of boxes at chase distance.
 function buildCarGeometry(police) {
   const P = [], N = [], PT = [], I = [];
   const BODY = 0, GLASS = 1, WHEEL = 2, HEAD = 3, TAIL = 4, TRIM = 5, RED = 6, BLUE = 7;

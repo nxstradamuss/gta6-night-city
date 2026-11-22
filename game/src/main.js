@@ -1,6 +1,9 @@
 // Boot and the one loop: read input, advance the world in fixed 1/60 s steps,
 // draw a frame. ?seed=N picks the city, ?shot=1|2|3 stages a frozen scene for
-// the screenshots and stops simulating so the picture is byte-stable.
+// the screenshots and stops simulating so the picture is byte-stable. The scene
+// handed to the renderer carries the player car's headlight position and aim, so
+// the ground shader can throw the cone onto the asphalt instead of faking a
+// round light pool under the bumper.
 
 import { CONFIG, PAINTS, STEP } from './config.js';
 import { Rng, mixSeed } from './random.js';

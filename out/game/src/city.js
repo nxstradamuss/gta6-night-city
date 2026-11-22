@@ -154,6 +154,9 @@ export function generateCity(rng, cfg) {
   // break up the skyline. Drawn after the lamps with the same program.
   const props = buildStreetProps(rng, { block: B, halfRoad, walk, reach: R })
     .concat(buildRoofProps(rng, buildings));
+  // Rooftop clutter is appended to the same list: the pavements and the roofs
+  // share one instanced batch, so the skyline gains detail without a new draw
+  // call or a second shader program.
 
   return { buildings, signs, lamps, props, lots, block: B, halfRoad, walk };
 }

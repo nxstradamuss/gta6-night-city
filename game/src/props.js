@@ -177,6 +177,9 @@ export const PROP_KINDS = [
     },
   },
   {
+    // Rooftop kinds carry weight 0: pickKind skips them, so street scatter never
+    // puts an air-conditioning unit on a pavement, while buildRoofProps can still
+    // place them by id on top of the buildings.
     id: 'ac',
     weight: 0,
     tint: [[0.30, 0.31, 0.33], [0.22, 0.23, 0.25], [0.34, 0.30, 0.26]],

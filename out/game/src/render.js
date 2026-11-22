@@ -1,6 +1,8 @@
 // Frame assembly: one place that owns the GL context, the render resolution and
 // the order the passes run in. Sky, wet asphalt, towers, lamps, cars, neon,
-// mission beacons, rain, then the bloom composite.
+// mission beacons, rain, then the bloom composite. The ground pass is handed the
+// scene clock as well as the scene, because the wet asphalt animates: rain
+// ripples and the neon smears both read uTime.
 
 import { CONFIG } from './config.js';
 import { makeNoiseTexture } from './gl.js';
