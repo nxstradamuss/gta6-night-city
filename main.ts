@@ -5,15 +5,25 @@
 // game/src/ that a desktop browser loads offline, with no library and no network.
 // This script is the gate between that source tree and the grader's /output:
 //
-//   1. preflight  — verify the source tree is coherent before copying a byte:
-//                   index.html exists, and every game/src/*.js module is imported
-//                   by something (index.html or another module). Orphans fail.
-//   2. copy       — mirror game/ into <out>/game and screenshots/ into
-//                   <out>/screenshots, then report what moved.
-//   3. report     — per-file byte and line counts for the copied game tree.
-//   4. dossier    — write the judge-facing dossier.json as exactly the bytes the
+//   1. output     — refuse an output directory that is not a safe place to write:
+//                   inside the repository, never the repository root itself, never
+//                   inside game/, screenshots/, vendor/ or .git/. The grader's
+//                   /output (mounted beside the read-only repository) is the one
+//                   directory outside the repository that is accepted.
+//   2. preflight  — verify the source tree is coherent before copying a byte:
+//                   index.html exists, every script it loads exists, every import
+//                   resolves to a file under game/, and every game/src/*.js module
+//                   (at any depth) is reachable from index.html. An orphan fails
+//                   with the offending file named.
+//   3. copy       — mirror game/ into <out>/game and screenshots/ into
+//                   <out>/screenshots, removing the previous copies first so a
+//                   deleted source file cannot survive as a stale output file.
+//   4. report     — per-file byte and line counts for the copied game tree.
+//   5. dossier    — write the judge-facing dossier.json as exactly the bytes the
 //                   vendored make.fun builder returns for <out>; the build stats
 //                   (files, bytes, lines, modules, node) go to the log instead.
+//   6. bundle     — the dossier's text in bytes against the 163840-byte cap, with
+//                   the headroom the build still has.
 //
 // Every step throws on failure; main() catches, prints one readable line to
 // stderr and exits non-zero, so a broken build never looks like a good one.
@@ -23,20 +33,27 @@
 //
 // Serve the result locally with `node serve.ts`, then open http://localhost:8080.
 
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const OUT_DIR = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+// The grader sets nothing and mounts a writable /output; outside it MAKEFUN_OUTPUT_DIR
+// names a directory of our own, which has to stay inside the repository.
+const OUT_ENV = process.env.MAKEFUN_OUTPUT_DIR;
+const OUT_DIR = OUT_ENV ?? '/output';
+const PLATFORM_OUT = '/output';
+const OUT_ROOT = resolve(OUT_DIR);
 
 const GAME_DIR = join(HERE, 'game');
 const SRC_DIR = join(GAME_DIR, 'src');
 const SHOTS_DIR = join(HERE, 'screenshots');
-const OUT_GAME = join(OUT_DIR, 'game');
-const OUT_SHOTS = join(OUT_DIR, 'screenshots');
-const DOSSIER = join(OUT_DIR, 'dossier.json');
+const VENDOR_DIR = join(HERE, 'vendor');
+const GIT_DIR = join(HERE, '.git');
+const OUT_GAME = join(OUT_ROOT, 'game');
+const OUT_SHOTS = join(OUT_ROOT, 'screenshots');
+const DOSSIER = join(OUT_ROOT, 'dossier.json');
 
 // The scorer's caps (reference/gate.json). text_max_bytes is the one that shapes
 // the dossier's bytes; the rest make the builder refuse an entry the scorer would.
@@ -73,6 +90,36 @@ function countLines(file: string): number {
   for (let i = 0; i < body.length; i++) if (body.charCodeAt(i) === 10) lines++;
   // A trailing newline terminates the last line rather than opening a new one.
   return body.charCodeAt(body.length - 1) === 10 ? lines - 1 : lines;
+}
+
+/** Whether child is strictly below parent, by resolved path rather than by string prefix. */
+function isBelow(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel !== '' && !rel.startsWith('..') && !rel.startsWith(sep);
+}
+
+/**
+ * The output directory must be a directory of this repository that holds none of its
+ * sources: writing game/ into game/ would copy the tree into itself. The one exception
+ * is the platform's /output, which the grader mounts next to a read-only repository and
+ * which is only reachable when MAKEFUN_OUTPUT_DIR is unset.
+ */
+function validateOutputDir(): void {
+  if (OUT_ENV === undefined) {
+    if (OUT_ROOT !== PLATFORM_OUT) fail(`output: no MAKEFUN_OUTPUT_DIR and ${OUT_DIR} is not ${PLATFORM_OUT}`);
+    return;
+  }
+  if (OUT_ROOT === HERE) {
+    fail(`output: MAKEFUN_OUTPUT_DIR=${OUT_DIR} is the repository root ${HERE}: the build would copy game/ into its own source tree; point it at a subdirectory such as out`);
+  }
+  if (!isBelow(HERE, OUT_ROOT)) {
+    fail(`output: MAKEFUN_OUTPUT_DIR=${OUT_DIR} resolves to ${OUT_ROOT}, which is outside the repository ${HERE}; point it at a subdirectory of the repository, such as out`);
+  }
+  for (const [label, dir] of [['game/', GAME_DIR], ['screenshots/', SHOTS_DIR], ['vendor/', VENDOR_DIR], ['.git/', GIT_DIR]] as const) {
+    if (OUT_ROOT === dir || isBelow(dir, OUT_ROOT)) {
+      fail(`output: MAKEFUN_OUTPUT_DIR=${OUT_DIR} resolves to ${OUT_ROOT}, inside ${label}; the build would write its output into the source tree it copies from`);
+    }
+  }
 }
 
 /** Every regular file below dir, as paths relative to it, in a stable order. */
@@ -123,51 +170,71 @@ interface Preflight {
   entries: string[];
 }
 
+/** Every .js module under game/src/, at any depth, as paths relative to game/. */
+function gameModules(): string[] {
+  if (!existsSync(SRC_DIR)) fail('preflight: game/src/ is missing');
+  const modules = walk(SRC_DIR)
+    .filter((rel) => rel.endsWith('.js'))
+    .map((rel) => `src/${rel}`)
+    .sort();
+  if (modules.length === 0) fail('preflight: game/src/ holds no .js modules');
+  return modules;
+}
+
 /**
  * Preflight: the tree must be self-consistent before it is copied.
  * Every game/src/*.js must be reachable from index.html's entry module.
  */
 function preflight(): Preflight {
   if (!existsSync(GAME_DIR)) fail(`preflight: ${GAME_DIR} does not exist`);
-  if (!existsSync(join(GAME_DIR, 'index.html'))) fail('preflight: game/index.html is missing');
-  if (!existsSync(SRC_DIR)) fail('preflight: game/src/ is missing');
-
-  const modules = readdirSync(SRC_DIR)
-    .filter((name) => name.endsWith('.js'))
-    .sort();
-  if (modules.length === 0) fail('preflight: game/src/ holds no .js modules');
-
   const html = join(GAME_DIR, 'index.html');
-  const entries = htmlScripts(html)
-    .map((s) => resolveSpecifier(html, s))
-    .filter((p): p is string => p !== null);
+  if (!existsSync(html)) fail('preflight: game/index.html is missing');
+
+  const modules = gameModules();
+
+  // index.html's own scripts: each local one has to name a file that is there.
+  const entries: string[] = [];
+  for (const src of htmlScripts(html)) {
+    const target = resolveSpecifier(html, src);
+    if (target === null) continue;
+    if (!existsSync(join(GAME_DIR, target))) {
+      fail(`preflight: game/index.html loads ${src}, but game/${target} does not exist`);
+    }
+    entries.push(target);
+  }
   if (entries.length === 0) fail('preflight: game/index.html loads no local module');
 
   // Walk the import graph from the HTML's entry points, collecting what is reached.
+  // A specifier that points at a file nobody wrote is a build error, named both ways.
   const reached = new Set<string>(entries);
   const queue = [...entries];
   while (queue.length > 0) {
     const rel = queue.pop() as string;
     const file = join(GAME_DIR, rel);
-    if (!existsSync(file)) fail(`preflight: ${rel} is imported but does not exist`);
     for (const specifier of importsOf(file)) {
       const target = resolveSpecifier(file, specifier);
-      if (target === null || reached.has(target)) continue;
+      if (target === null) continue;
+      if (!existsSync(join(GAME_DIR, target))) {
+        fail(`preflight: game/${rel} imports '${specifier}', but game/${target} does not exist`);
+      }
+      if (reached.has(target)) continue;
       reached.add(target);
       queue.push(target);
     }
   }
 
-  const orphans = modules
-    .map((name) => `src/${name}`)
-    .filter((rel) => !reached.has(rel));
+  // An orphan is dead code the browser will never load; name it, don't count it.
+  const orphans = modules.filter((rel) => !reached.has(rel));
   if (orphans.length > 0) {
-    const list = orphans.map((p) => `  - game/${p}`).join('\n');
-    fail(`preflight: ${orphans.length} orphan module(s) never imported:\n${list}\nEvery game/src/*.js must be reachable from game/index.html.`);
+    const list = orphans.map((p) => `game/${p}`);
+    const headline = list.length === 1
+      ? `${list[0]} is not reachable from game/index.html: no module imports it`
+      : `${list.length} modules are not reachable from game/index.html:\n${list.map((p) => `  - ${p}`).join('\n')}`;
+    fail(`preflight: ${headline}\n  every game/src/*.js must be imported, directly or through another module, from the entry module game/${entries[0]}`);
   }
 
   console.log(`preflight  ok  ${modules.length} modules, ${reached.size} files reachable from index.html`);
-  return { modules: modules.map((n) => `src/${n}`), entries };
+  return { modules, entries };
 }
 
 interface CopyReport {
@@ -178,6 +245,9 @@ interface CopyReport {
 /** Mirror a source tree into the output tree, returning what was written. */
 function copyTree(from: string, to: string, label: string): CopyReport {
   if (!existsSync(from)) fail(`copy: ${label} source ${from} is missing`);
+  // Drop the previous copy: cpSync merges, so a file deleted from game/ would
+  // otherwise linger in out/ and be measured and dossed as if it were still source.
+  rmSync(to, { recursive: true, force: true });
   mkdirSync(to, { recursive: true });
   cpSync(from, to, { recursive: true });
 
@@ -225,15 +295,38 @@ function printReport(rows: FileStat[]): void {
   }
 }
 
+/** The dossier's text, read back from the builder's bytes without touching them. */
+function dossierText(bytes: Uint8Array): string {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(Buffer.from(bytes).toString('utf8'));
+  } catch (err) {
+    fail(`dossier: the builder's bytes are not JSON (${(err as Error).message})`);
+  }
+  const text = (doc as { text?: unknown }).text;
+  if (typeof text !== 'string') fail('dossier: the builder returned no text field');
+  return text;
+}
+
 function writeDossier(game: CopyReport, rows: FileStat[], pre: Preflight): number {
   // The dossier is buildDossier's own bytes, written untouched: the gate compares
   // out/dossier.json against a fresh buildDossier() call over the same directory.
   // So no parse, no re-serialise, no added fields — those would change the bytes.
-  const bytes = buildDossier(OUT_DIR, CAPS);
+  const bytes = buildDossier(OUT_ROOT, CAPS);
 
   if (bytes.length > 4 * 1024 * 1024) fail(`dossier: ${bytes.length} bytes exceeds the 4 MiB cap`);
+
+  // The scorer caps the dossier's text, not its JSON envelope, so measure the text.
+  const cap = CAPS.text_max_bytes;
+  const used = Buffer.byteLength(dossierText(bytes), 'utf8');
+  const headroom = cap - used;
+  if (headroom < 0) {
+    fail(`bundle: the dossier's text is ${used} bytes, ${-headroom} over the ${cap}-byte cap (text_max_bytes); trim the game's source or comments`);
+  }
+
   writeFileSync(DOSSIER, bytes);
   console.log(`dossier    ok  out/dossier.json  ${humanBytes(bytes.length)}`);
+  console.log(`bundle     ok  ${used} / ${cap} bytes  ${headroom} bytes headroom`);
 
   // The build statistics live here, in the log, and nowhere in the dossier.
   const lines = rows.reduce((sum, r) => sum + (r.lines ?? 0), 0);
@@ -245,8 +338,9 @@ function writeDossier(game: CopyReport, rows: FileStat[], pre: Preflight): numbe
 function build(): void {
   console.log(`build      out=${OUT_DIR}`);
 
+  validateOutputDir();
   const pre = preflight();
-  mkdirSync(OUT_DIR, { recursive: true });
+  mkdirSync(OUT_ROOT, { recursive: true });
 
   const game = copyTree(GAME_DIR, OUT_GAME, 'game/');
   if (existsSync(SHOTS_DIR)) copyTree(SHOTS_DIR, OUT_SHOTS, 'screenshots/');
